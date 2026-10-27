@@ -22,15 +22,16 @@ Research project reproducing native INT8 neural-network inference on AMD RDNA 3 
 
 ## Commands
 
-No build is configured yet (milestone M01 in progress). When M01 lands, register the canonical commands here:
-
 ```powershell
-cmake --preset debug          # configure
-cmake --build --preset debug  # build
-ctest --preset debug          # tests
-build/bin/rdna3-int8.exe list # experiment CLI (planned interface)
-build/bin/rdna3-int8.exe run wmma-int8
+cmake --preset debug                  # configure (VS 2022 x64)
+cmake --preset release                # configure release
+cmake --build --preset debug          # build
+ctest --preset debug                  # run smoke tests
+build/bin/rdna3-int8.exe list         # experiment CLI
+build/bin/rdna3-int8.exe run <name>   # exit 0 pass · 1 experiment failure · 2 usage error
 ```
+
+Experiments register explicitly in `src/main.cpp`; do not create additional executables (see `docs/architecture.md` §6).
 
 Toolchain: VS 2022 Community (MSVC 14.44 — not on PATH; use vcvars or the CMake VS generator), Windows SDK 10.0.26100 (`dxc.exe` at `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64`), CMake/Ninja/Python 3.13/Git on PATH.
 

@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M02 complete, M01 in progress (see per-milestone status) |
+| Status | Roadmap — M01–M02 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -130,7 +130,7 @@ Complete one milestone at a time. Do not implement future milestones unless a de
 
 ### M01 — Environment and Bootstrap
 
-**Status:** ◐ in progress (C01, C02, C06 satisfied by the environment baseline — [`findings/2026-10-27-environment-baseline.md`](findings/2026-10-27-environment-baseline.md); build/run checkpoints pending)
+**Status:** ☑ complete (2026-10-27 — C01/C02/C06 by the environment baseline, C03–C05 by [`experiments/EXP-001-bootstrap.md`](experiments/EXP-001-bootstrap.md))
 
 #### Objective
 
@@ -150,19 +150,19 @@ Establish a minimal, reproducible development environment.
 
 - [x] C01: Verify GPU identity and driver.
 - [x] C02: Verify available compiler and SDK versions.
-- [ ] C03: Configure the minimal CMake project.
-- [ ] C04: Compile a standalone executable.
-- [ ] C05: Execute the compiled program.
+- [x] C03: Configure the minimal CMake project.
+- [x] C04: Compile a standalone executable.
+- [x] C05: Execute the compiled program.
 - [x] C06: Record the development environment.
 
 #### Validation Gate
 
-- [ ] CMake configuration succeeds.
-- [ ] C++ compilation succeeds.
-- [ ] Executable runs successfully.
+- [x] CMake configuration succeeds.
+- [x] C++ compilation succeeds.
+- [x] Executable runs successfully.
 - [x] GPU and driver are identified.
 - [x] Toolchain versions are recorded.
-- [ ] Build instructions are reproducible.
+- [x] Build instructions are reproducible.
 
 #### Deliverables
 
@@ -1086,7 +1086,8 @@ Keep documentation minimal. Suggested structure:
 
 ```text
 docs/
-├── milestones.md
+├── MILESTONES.md
+├── architecture.md
 ├── findings/
 │   └── ...
 └── experiments/
