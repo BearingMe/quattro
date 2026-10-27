@@ -25,10 +25,14 @@ add_executable(rdna3-int8
     src/gpu/compute.cpp
     src/gpu/amdext.cpp
     src/gpu/matmul.cpp
+    src/gpu/sequence.cpp
     src/gpu/tensor_ops.cpp
     src/reference/reference.cpp
+    src/reference/fixed_network.cpp
     src/reference/tensor_ops.cpp
     src/experiments/tensor_ops.cpp
+    src/experiments/fixed_network_reference.cpp
+    src/experiments/fixed_network_inference.cpp
     src/experiments/experiments.cpp)
 
 target_link_libraries(rdna3-int8 PRIVATE d3d12.lib dxgi.lib)
@@ -194,6 +198,39 @@ add_custom_command(
     DEPENDS ${SHADER_SRC}/tensor_ops.hlsl
     COMMENT "dxc: tensor_ops.hlsl -> shaders/tensor_ops.cso")
 
+# M11: fixed-network kernels. One 16x16x16 WMMA GEMM tile serves both layers;
+# requant variants differ only in the baked ReLU clamp. Scales are exact
+# powers of two (sIn=1, sW=1, sOut=16) so requantization is exact integer
+# division by 16 — see EXP-009.
+foreach(_pair raw_m16k16n16:1:16:256:512 requant_m16n16:0 requant_m16n16_relu:1)
+    string(REPLACE ":" ";" _pairList ${_pair})
+    list(GET _pairList 0 _suf)
+    list(GET _pairList 1 _tilesOrRelu)
+    if(_suf MATCHES "^raw_")
+        add_custom_command(
+            OUTPUT ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+            COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -enable-16bit-types -HV 2021
+                    -E gemm_raw -D "GEMM_K_TILES=${_tilesOrRelu}" -D "GEMM_N=16"
+                    -D "GEMM_B_OFF=256" -D "GEMM_ZERO_OFF=512" -I "${SHADER_INC}"
+                    -Fo ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+                    ${SHADER_SRC}/gemm_i8.hlsl
+            DEPENDS ${SHADER_SRC}/gemm_i8.hlsl
+                    ${SHADER_SRC}/../amd/AmdExtD3D/AmdExtD3DShaderIntrinsicsMatrixOps.hlsl
+            COMMENT "dxc: gemm_i8.hlsl(${_suf}) -> shaders/gemm_${_suf}.cso")
+    else()
+        add_custom_command(
+            OUTPUT ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+            COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -enable-16bit-types -HV 2021
+                    -E gemm_requant -D "GEMM_RELU=${_tilesOrRelu}" -D "GEMM_N=16"
+                    -D "GEMM_N_REAL=16" -D "GEMM_ACC_OFF=0" -D "GEMM_BIAS_OFF=1024"
+                    -D "GEMM_SIN=1.0f" -D "GEMM_SW=1.0f" -D "GEMM_SOUT=16.0f" -I "${SHADER_INC}"
+                    -Fo ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+                    ${SHADER_SRC}/gemm_i8.hlsl
+            DEPENDS ${SHADER_SRC}/gemm_i8.hlsl
+            COMMENT "dxc: gemm_i8.hlsl(${_suf}) -> shaders/gemm_${_suf}.cso")
+    endif()
+endforeach()
+
 add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/tensor_ops.cso
     ${FSR4_SHADER_DIR}/vector_add.cso
@@ -223,7 +260,10 @@ add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/gemm_raw_m256k256n256.cso
     ${FSR4_SHADER_DIR}/gemm_requant_m32n24.cso
     ${FSR4_SHADER_DIR}/gemm_requant_m64n16.cso
-    ${FSR4_SHADER_DIR}/gemm_requant_m64n20.cso)
+    ${FSR4_SHADER_DIR}/gemm_requant_m64n20.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m16k16n16.cso
+    ${FSR4_SHADER_DIR}/gemm_requant_m16n16.cso
+    ${FSR4_SHADER_DIR}/gemm_requant_m16n16_relu.cso)
 add_dependencies(rdna3-int8 compile_shaders)
 
 enable_testing()
@@ -251,3 +291,9 @@ add_test(NAME experiment_quantization COMMAND rdna3-int8 run quantization)
 # M09 hardware test: INT8 GEMM/requant/conv kernels must pass on this machine.
 add_test(NAME experiment_kernels_int8 COMMAND rdna3-int8 run kernels-int8)
 add_test(NAME experiment_tensor_ops COMMAND rdna3-int8 run tensor-ops)
+
+# M11 preliminary CPU oracle validation; this is not the inference gate.
+add_test(NAME experiment_m11_reference COMMAND rdna3-int8 run m11-reference)
+
+# M11 hardware gate: the fixed two-layer INT8 network must pass end-to-end.
+add_test(NAME experiment_fixed_network COMMAND rdna3-int8 run fixed-network)

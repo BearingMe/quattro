@@ -1639,7 +1639,8 @@ int RunInt8Kernels() {
     // --- Part 5 (C08): benchmarks, run twice for reproducibility. ---
     if (ok) {
         const auto benchGemm = [&](ID3D12PipelineState* pso, uint32_t mp, uint32_t np,
-                                   uint32_t k, double& minUs) -> bool {
+                                   uint32_t k, double& minUs,
+                                   uint32_t timedDispatches = 100) -> bool {
             if (!core::ValidateInt8Accumulation(k, 0, error)) {
                 std::fprintf(stderr, "error: %s\n", error.c_str());
                 return false;
@@ -1659,7 +1660,7 @@ int RunInt8Kernels() {
             std::vector<int32_t> outWarmup;
             std::vector<int32_t> outTimed;
             if (!gpu::RunGemmTile(ctx, rootSignature, pso, blob.size(), mp * np * 4u,
-                                  np / 16, mp / 16, 10, 100, blob.data(),
+                                  np / 16, mp / 16, 10, timedDispatches, blob.data(),
                                   outWarmup, outTimed, timing, error)) {
                 std::fprintf(stderr, "error: %s\n", error.c_str());
                 return false;
@@ -1672,21 +1673,27 @@ int RunInt8Kernels() {
         double rawK256[2];
         // Discarded warm cycle: cross-run clock state dominates otherwise
         // (M07 finding: within-run min-of-100 is the reliable metric).
+        // 1000 timed dispatches (~0.2 s of sustained load) ramp the GPU to
+        // steady-state clocks — the shorter settle left run 0 systematically
+        // slow (up to 35% spread) when CTest ran other GPU experiments first
+        // (observed 2026-10-27, see EXP-009). Measured runs are unchanged.
         {
             double discard = 0.0;
-            benchGemm(rawM256K64N256.Get(), 256, 256, 64, discard);
-            benchGemm(rawM256K256N256.Get(), 256, 256, 256, discard);
+            if (!benchGemm(rawM256K64N256.Get(), 256, 256, 64, discard, 1000) ||
+                !benchGemm(rawM256K256N256.Get(), 256, 256, 256, discard, 1000)) {
+                ok = false;
+            }
         }
         for (uint32_t r = 0; r < 2 && ok; ++r) {
-            if (!benchGemm(rawM256K64N256.Get(), 256, 256, 64, rawK64[r]) ||
-                !benchGemm(rawM256K256N256.Get(), 256, 256, 256, rawK256[r]))
+            if (!benchGemm(rawM256K64N256.Get(), 256, 256, 64, rawK64[r], 1000) ||
+                !benchGemm(rawM256K256N256.Get(), 256, 256, 256, rawK256[r], 1000))
                 ok = false;
         }
         if (ok) {
             const double k64Spread = rawK64[0] > 0 ? std::fabs(rawK64[1] - rawK64[0]) / rawK64[0] : 1.0;
             const double k256Spread = rawK256[0] > 0 ? std::fabs(rawK256[1] - rawK256[0]) / rawK256[0] : 1.0;
             std::printf("benchmark gemm 256x256: K64 min %.2f/%.2f us (spread %.1f%%), "
-                        "K256 min %.2f/%.2f us (spread %.1f%%), 10 warmup + 100 timed\n",
+                        "K256 min %.2f/%.2f us (spread %.1f%%), 10 warmup + 1000 timed\n",
                         rawK64[0], rawK64[1], k64Spread * 100.0,
                         rawK256[0], rawK256[1], k256Spread * 100.0);
             if (k64Spread > 0.10 || k256Spread > 0.10) {
@@ -1698,17 +1705,7 @@ int RunInt8Kernels() {
 
     std::string queueErrors;
     size_t benignCount = 0;
-    if (!gpu::InfoQueueCleanWithFilter(
-            ctx,
-            [](const D3D12_MESSAGE& msg) {
-                if (!msg.pDescription)
-                    return false;
-                const char* desc = msg.pDescription;
-                return strstr(desc, "GPU-BASED VALIDATION") != nullptr &&
-                       strstr(desc, "Root descriptor access out of bounds") != nullptr &&
-                       strstr(desc, "Root Parameter Index: [2]") != nullptr;
-            },
-            benignCount, queueErrors)) {
+    if (!gpu::InfoQueueCleanGbavBenign(ctx, benignCount, queueErrors)) {
         std::fprintf(stderr, "%s", queueErrors.c_str());
         ok = false;
     } else {

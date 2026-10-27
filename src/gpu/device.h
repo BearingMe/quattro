@@ -61,4 +61,11 @@ bool InfoQueueCleanWithFilter(DeviceContext& ctx,
                               const std::function<bool(const D3D12_MESSAGE&)>& benign,
                               size_t& benignCount, std::string& errors);
 
+// The established benign filter: GPU-based-validation "Root descriptor access
+// out of bounds" reports for root parameter 2 — the AMD intrinsics dummy UAV
+// (evidence: EXP-004). Shared so every experiment applies exactly the same
+// suppression; a genuine param-2 OOB elsewhere still matches this pattern, so
+// its diagnosis must include the ISA/blob analysis, not just this verdict.
+bool InfoQueueCleanGbavBenign(DeviceContext& ctx, size_t& benignCount, std::string& errors);
+
 } // namespace gpu

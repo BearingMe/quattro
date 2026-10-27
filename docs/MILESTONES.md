@@ -602,6 +602,10 @@ Start with straightforward implementations. Investigate implicit GEMM, direct co
 - [x] Accumulation overflow is prevented or detected.
 - [x] Native matrix instructions remain present.
 - [x] Performance measurements are reproducible.
+  Methodology updated 2026-10-27 (gate unchanged at 10%): the discarded warm
+  cycle now runs 1000 timed dispatches (~0.2 s sustained load) and measured
+  runs take min-of-1000 — the former min-of-100 estimator proved flaky under
+  CTest scheduling (observed 35% Debug / 10.6% Release spread; EXP-009).
 
 #### Deliverables
 
@@ -678,7 +682,15 @@ Do not implement an operation merely because it is common in neural networks.
 
 ### M11 — Standalone INT8 Neural Inference
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-009-fixed-network.md`](experiments/EXP-009-fixed-network.md))
+
+[M] Gate PASS on gfx1101: the fixed two-layer INT8 network (16×16×16 WMMA
+GEMMs + ReLU requantization) executes GPU-resident end-to-end; all
+intermediates and the final output match the independent CPU reference
+exactly; first-vs-last output equality holds over 100 timed executions
+(each timed pass is independent and fully overwriting by construction);
+~41 µs end-to-end (min of 100, Debug). Final rebuilt CTest 11/11 on Debug
+and Release.
 
 #### Objective
 
@@ -698,28 +710,30 @@ Use a fixed execution graph. Do not implement a general model parser or graph co
 
 #### Checkpoints
 
-- [ ] C01: Define a minimal test network.
-- [ ] C02: Establish its CPU reference implementation.
-- [ ] C03: Load quantized weights.
-- [ ] C04: Execute every layer on the GPU.
-- [ ] C05: Compare intermediate tensors.
-- [ ] C06: Compare final outputs.
-- [ ] C07: Measure end-to-end inference time.
-- [ ] C08: Verify repeated execution.
+- [x] C01: Define a minimal test network.
+- [x] C02: Establish its CPU reference implementation.
+- [x] C03: Load quantized weights.
+- [x] C04: Execute every layer on the GPU.
+- [x] C05: Compare intermediate tensors.
+- [x] C06: Compare final outputs.
+- [x] C07: Measure end-to-end inference time.
+- [x] C08: Verify repeated execution.
 
 #### Validation Gate
 
-- [ ] Entire network executes on gfx1101.
-- [ ] Every required layer executes.
-- [ ] Intermediate tensors have correct shapes.
-- [ ] Final output matches the CPU quantized reference within tolerance.
-- [ ] No unexplained overflow or memory corruption occurs.
-- [ ] Execution is deterministic under fixed inputs and conditions.
-- [ ] GPU timing is recorded.
+- [x] Entire network executes on gfx1101.
+- [x] Every required layer executes.
+- [x] Intermediate tensors have correct shapes.
+- [x] Final output matches the CPU quantized reference within tolerance.
+- [x] No unexplained overflow or memory corruption occurs.
+- [x] Execution is deterministic under fixed inputs and conditions.
+- [x] GPU timing is recorded.
 
 #### Deliverables
 
-- Standalone INT8 inference executable.
+- Standalone INT8 inference experiment within the primary CLI (`rdna3-int8.exe
+  run fixed-network`) — the single-executable architecture rule (architecture
+  §6) intentionally precludes a separate executable.
 - Reference network.
 - CPU/GPU comparison results.
 - Performance baseline.

@@ -31,6 +31,8 @@ const std::vector<Experiment>& experiments() {
         {"quantization", "M08 FP8/INT8 quantization contract (incl. AMD QuantizeLinear on hw)", &experiments::RunQuantization},
         {"kernels-int8", "M09 INT8 GEMM/requant/conv kernels on native WMMA", &experiments::RunInt8Kernels},
         {"tensor-ops", "M10 neural tensor operations and precision boundaries", &experiments::RunTensorOps},
+        {"m11-reference", "M11 fixed-network CPU reference checks only", &experiments::RunFixedNetworkReference},
+        {"fixed-network", "M11 standalone INT8 network inference on native WMMA (end-to-end)", &experiments::RunFixedNetworkGpu},
     };
     return kExperiments;
 }

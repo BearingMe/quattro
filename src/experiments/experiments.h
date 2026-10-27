@@ -32,4 +32,12 @@ int RunInt8Kernels();
 // M10 — source-justified non-matrix operations and explicit tensor contracts.
 int RunTensorOps();
 
+// M11 preliminary CPU oracle check, not the milestone's GPU inference gate.
+int RunFixedNetworkReference();
+
+// M11 hardware gate: the fixed two-layer INT8 network executed end-to-end on
+// the GPU (native WMMA + requantization, GPU-resident intermediates, CPU
+// comparison, repeated execution, end-to-end timing).
+int RunFixedNetworkGpu();
+
 } // namespace experiments

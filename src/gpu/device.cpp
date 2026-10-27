@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 
 #pragma comment(lib, "d3d12.lib")
@@ -201,6 +202,20 @@ bool InfoQueueCleanWithFilter(DeviceContext& ctx,
 bool InfoQueueClean(DeviceContext& ctx, std::string& errors) {
     size_t ignored = 0;
     return InfoQueueCleanWithFilter(ctx, {}, ignored, errors);
+}
+
+bool InfoQueueCleanGbavBenign(DeviceContext& ctx, size_t& benignCount, std::string& errors) {
+    return InfoQueueCleanWithFilter(
+        ctx,
+        [](const D3D12_MESSAGE& msg) {
+            if (!msg.pDescription)
+                return false;
+            const char* desc = msg.pDescription;
+            return strstr(desc, "GPU-BASED VALIDATION") != nullptr &&
+                   strstr(desc, "Root descriptor access out of bounds") != nullptr &&
+                   strstr(desc, "Root Parameter Index: [2]") != nullptr;
+        },
+        benignCount, errors);
 }
 
 } // namespace gpu

@@ -37,8 +37,10 @@
 #ifndef GEMM_ZERO_OFF
 #define GEMM_ZERO_OFF 0
 #endif
-// requant only (scales ride on these #ifndef defaults — the CMake rules do
-// not pass them; the experiment's CPU side uses the same literals):
+// requant only (scales ride on these #ifndef defaults; CMake passes per-CSO
+// defines. The M11 bake — GEMM_SIN=1.0f, GEMM_SW=1.0f, GEMM_SOUT=16.0f — is
+// EXACT power-of-two arithmetic, so requantization is bit-exact vs an integer
+// oracle. Non-power-of-two scales make NO such guarantee — see EXP-009.):
 #ifndef GEMM_ACC_OFF
 #define GEMM_ACC_OFF 0
 #endif
@@ -47,6 +49,11 @@
 #endif
 #ifndef GEMM_N_REAL
 #define GEMM_N_REAL 16
+#endif
+// M11: the fixed network's first layer applies ReLU at requantization; the
+// second does not. Clamping lower bound is baked per CSO (codegen model).
+#ifndef GEMM_RELU
+#define GEMM_RELU 0
 #endif
 #ifndef GEMM_SIN
 #define GEMM_SIN 0.014884727f
@@ -123,8 +130,14 @@ void gemm_requant(uint3 dtid : SV_DispatchThreadID) {
 
         // AMD FNB_CT2D L113: round((acc * (sIn*sW) + bias) * (1/sOut)), then
         // pack_clamp_s8. Same fp32 operation order as the source, per element.
+        // GEMM_RELU=1 clamps to [0,127] (the ConvNextBlock/FasterNetBlock
+        // activation idiom) instead of [-128,127].
         const float value = (float(acc) * combined + bias) * rcpOut;
+#if GEMM_RELU
+        const int q = clamp(int(round(value)), 0, 127);
+#else
         const int q = clamp(int(round(value)), -128, 127);
+#endif
         packed |= (uint(q) & 0xFFu) << (lane * 8u);
     }
     g_out.Store(dwordIdx * 4u, packed);

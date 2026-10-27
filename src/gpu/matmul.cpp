@@ -1,4 +1,5 @@
 #include "matmul.h"
+#include "d3d12util.h"
 
 #include <algorithm>
 #include <cstring>
@@ -7,6 +8,10 @@
 #pragma comment(lib, "d3d12.lib")
 
 namespace gpu {
+
+using d3d12::BufferDesc;
+using d3d12::HeapProps;
+using d3d12::TransitionBarrier;
 
 bool CreateGemmTileRootSignature(DeviceContext& ctx,
                                  ComPtr<ID3D12RootSignature>& rootSignature,
@@ -43,41 +48,6 @@ bool CreateGemmTileRootSignature(DeviceContext& ctx,
     }
     return true;
 }
-
-namespace {
-
-D3D12_HEAP_PROPERTIES HeapProps(D3D12_HEAP_TYPE type) {
-    D3D12_HEAP_PROPERTIES props{};
-    props.Type = type;
-    return props;
-}
-
-D3D12_RESOURCE_DESC BufferDesc(uint64_t bytes, D3D12_RESOURCE_FLAGS flags) {
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = bytes;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    desc.Flags = flags;
-    return desc;
-}
-
-D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
-                                         D3D12_RESOURCE_STATES before,
-                                         D3D12_RESOURCE_STATES after) {
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    return barrier;
-}
-
-} // namespace
 
 bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
                  ComPtr<ID3D12PipelineState> pso, size_t inputBytes, size_t outputBytes,
