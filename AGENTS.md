@@ -49,6 +49,33 @@ Toolchain: VS 2022 Community (MSVC 14.44 — not on PATH; use vcvars or the CMak
 2. Record results per `docs/CONVENTIONS.md`: experiments in `docs/experiments/EXP-NNN-slug.md`, durable knowledge in `docs/findings/`, engineering decisions in `.references/findings.md` where they stem from research.
 3. A milestone is complete only when its validation gate PASSES on the gfx1101 hardware, with evidence recorded. Compilation alone never passes a gate.
 
+## Memory and Context Discipline
+
+Each category of knowledge has one authoritative home — cross-reference it, never duplicate it:
+
+| Information | Owner |
+|---|---|
+| Permanent agent & engineering rules | `AGENTS.md`, `docs/architecture.md` |
+| Milestone progress & gate evidence | `docs/MILESTONES.md` |
+| Research-derived engineering decisions | `.references/findings.md` |
+| Current tasks & next actions | OpenCode todos (ephemeral — rebuild from the active milestone if lost) |
+| Reusable facts & pointers | AgentMemory (concise; supplements docs, never replaces them) |
+| Detailed technical findings | `docs/findings/` |
+| Experimental records & measurements | `docs/experiments/` |
+| External references | `.references/` |
+| Implementation & history | Source code, Git — never backup copies or memory entries |
+| Generated artifacts | `build/` |
+
+Rules:
+
+1. Store knowledge, not conversations. Persist only what helps a future session: verified facts, decisions, constraints, reproducible failures. Tag evidence per `docs/CONVENTIONS.md` — a `[H]` repeated across sessions is still `[H]`; never invent versions, measurements, or experiment IDs.
+2. Before persisting, ask: does this affect a future decision, is it reliable, and is it already recorded somewhere authoritative? Prefer one precise fact plus a pointer to the evidence file over copied excerpts. Scope findings to their hardware/FSR version — a gfx1101 measurement is not all RDNA 3; FSR 4.0.2 is not FSR 4.1.
+3. Keep memory correct: when evidence changes, update the authoritative document first, then the memory entry; mark superseded findings and retire what is wrong, duplicated, or obsolete. Failed experiments are durable negative evidence — record, never delete. Claim memory writes only when they actually succeeded.
+4. Session start: read `AGENTS.md`, identify the active milestone in `docs/MILESTONES.md`, read only that milestone's gate and the relevant source files, check `git status`, and retrieve only targeted AgentMemory facts. Do not read every document, dump the memory database, or reconstruct project history.
+5. Session end: update milestone status and gate evidence, record findings, correct stale memory entries, close finished todos, and report incomplete work. No session-summary files; no memory writes just to demonstrate memory management.
+6. Treat context as a budget: search precisely, read specific files, reference sources rather than pasting them. When context is tight, prioritize: active objective > validation gate > relevant code > verified constraints > blockers > next steps.
+7. Never store credentials, tokens, keys, or sensitive environment data in memory, docs, or experiment reports.
+
 ## Never
 
 - Never implement future milestones "while you're in there"; no speculative abstractions or placeholder modules.
