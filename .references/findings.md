@@ -22,7 +22,7 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 
 - **Observation:** Weights â‰ˆ 87.1 KB (INT8) / 127.0 KB (FP8) per quality tier; ~14 model + 13 post dispatches @1080p; ~20 MB scratch; NHWC, 7 input channels.
 - **Evidence:** [S] directory listing of all 12 `initializers.bin` files @ `c5e34b4`; [S-lhl] lhl repo @ `49015b7` (pass counts, scratch, channels).
-- **Confidence:** High (weights measured locally; pass counts from lhl audit, re-verify in EXP-002).
+- **Confidence:** High (weights measured locally; pass counts from the lhl audit, verified against the provider's dispatch code â€” see the [M04 architecture report](../docs/findings/2026-10-27-fsr4-architecture.md) Â§3.1).
 - **Implication:** Execution is likely dispatch/memory-overhead-sensitive, not FLOP-bound â†’ our harness must measure launch + memory movement early (M05), and pass fusion is a later optimization, not a first-order concern.
 
 ## F4 â€” Public FidelityFX SDK 2.3.0 does not contain FSR 4 source
@@ -54,9 +54,9 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 - **Confidence:** High that the path exists; [U] whether our driver/gfx1101 exposes it (SDK dxc 1.8.2502 also too old to compile SM 6.9).
 - **Implication:** M06 requires: newer standalone DXC + Agility SDK + `CheckFeatureSupport` probe; keep DP4A path as the portable fallback.
 
-## F8 — The official FSR 4.1 runtime runs unmodified on gfx1101: ~1.36 ms at Quality 720p?1080p (M03 oracle)
+## F8 ï¿½ The official FSR 4.1 runtime runs unmodified on gfx1101: ~1.36 ms at Quality 720p?1080p (M03 oracle)
 
-- **Observation:** FSR SDK 2.3.0's signed `amd_fidelityfx_upscaler_dx12.dll` (4.1.1.2740) enumerates upscaler versions **4.1.2\* (default), 4.1.1, 3.1.5, 2.3.4** and executes its default **FSR 4.1.2 ML upscaler** on the RX 7700 XT via the official prebuilt `FidelityFX_FSR` sample: 1280×707 ? 1920×1061, Quality preset (qualityMode 1), **avg 1.3645 / 1.3528 ms** across two 600-frame runs (? ˜ 0.9%). Captured frames valid (sharp Sponza, readable inscriptions).
+- **Observation:** FSR SDK 2.3.0's signed `amd_fidelityfx_upscaler_dx12.dll` (4.1.1.2740) enumerates upscaler versions **4.1.2\* (default), 4.1.1, 3.1.5, 2.3.4** and executes its default **FSR 4.1.2 ML upscaler** on the RX 7700 XT via the official prebuilt `FidelityFX_FSR` sample: 1280ï¿½707 ? 1920ï¿½1061, Quality preset (qualityMode 1), **avg 1.3645 / 1.3528 ms** across two 600-frame runs (? ï¿½ 0.9%). Captured frames valid (sharp Sponza, readable inscriptions).
 - **Evidence:** [M] EXP-002 (`docs/experiments/EXP-002-fsr4-baseline.md`), outputs archived in `build/captures/m03/`; version enumeration in `Cauldron.log`; `GPU`/`DriverVersion` recorded in benchmark JSONs.
 - **Confidence:** High (two independent runs, in-band device identification, official binaries unmodified).
-- **Implication:** (1) M03 oracle established — no 4.0.x substitute needed for the baseline; (2) whole-frame `GPUTime` label in Cauldron benchmark JSONs is broken (4e-05 ms) — use per-label timings; (3) sample exits 0xC0000005 at teardown after writing outputs (quirk, not a measurement issue); (4) 4.1.1 is UI-selectable for exact-version A/B in later milestones.
+- **Implication:** (1) M03 oracle established ï¿½ no 4.0.x substitute needed for the baseline; (2) whole-frame `GPUTime` label in Cauldron benchmark JSONs is broken (4e-05 ms) ï¿½ use per-label timings; (3) sample exits 0xC0000005 at teardown after writing outputs (quirk, not a measurement issue); (4) 4.1.1 is UI-selectable for exact-version A/B in later milestones.

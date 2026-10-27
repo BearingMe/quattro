@@ -24,7 +24,7 @@ Never introduce: Clean Architecture layering, plugin systems, dependency-injecti
 
 **CMake is the single authoritative build system.** No independent build systems, per-experiment projects, custom build wrappers, or duplicate configurations. Use CMake Presets for distinct configurations.
 
-Current status: no build exists yet. The CMake project (root `CMakeLists.txt`, `CMakePresets.json`) is introduced at milestone M01.
+Current status: the CMake project (root `CMakeLists.txt`, `CMakePresets.json`) exists since M01 (commit `cf56bca`); M05 added the first module code (`src/gpu/`, `src/reference/`, `src/experiments/`) and the offline DXC shader pipeline (`DXC_EXECUTABLE` cache variable → `build/bin/shaders/*.cso`).
 
 ## 3. Module responsibilities
 
