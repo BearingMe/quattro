@@ -255,4 +255,62 @@ QuantErrorStats ComputeQuantError(const float* ref, const int8_t* q,
     return stats;
 }
 
+// --- M09 ---
+
+void CpuInt8Gemm(const int8_t* a, const int8_t* b, int64_t* out,
+                 uint32_t mCount, uint32_t nCount, uint32_t kCount) {
+    for (uint32_t m = 0; m < mCount; ++m) {
+        for (uint32_t n = 0; n < nCount; ++n) {
+            int64_t acc = 0;
+            for (uint32_t k = 0; k < kCount; ++k)
+                acc += int64_t(a[m * kCount + k]) * int64_t(b[k * nCount + n]);
+            out[m * nCount + n] = acc;
+        }
+    }
+}
+
+int8_t CpuRequantElement(int64_t acc, uint16_t biasF16Bits,
+                         float combinedScale, float rcpOutScale) {
+    // Exact AMD FNB_CT2D L113 operation order in fp32:
+    //   round((acc * (sIn*sW) + bias) * (1/sOut)) -> clamp [-128, 127].
+    const float value = (float(acc) * combinedScale +
+                         core::F16ToF32(biasF16Bits)) * rcpOutScale;
+    const float rounded = std::nearbyint(value); // ties-to-even = HLSL round()
+    if (rounded >= 127.0f)
+        return 127;
+    if (rounded <= -128.0f)
+        return -128;
+    return int8_t(rounded);
+}
+
+void CpuConv3x3p1I8(const int8_t* input, const int8_t* weights,
+                    const uint16_t* biasF16, int8_t* out,
+                    uint32_t h, uint32_t w, uint32_t cin, uint32_t cout,
+                    float inScale, float wScale, float outScale) {
+    const float combined = inScale * wScale;
+    const float rcpOut = 1.0f / outScale;
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            for (uint32_t f = 0; f < cout; ++f) {
+                int64_t acc = 0;
+                for (uint32_t ky = 0; ky < 3; ++ky) {
+                    const int32_t iy = int32_t(y + ky) - 1;
+                    for (uint32_t kx = 0; kx < 3; ++kx) {
+                        const int32_t ix = int32_t(x + kx) - 1;
+                        if (iy < 0 || iy >= int32_t(h) || ix < 0 || ix >= int32_t(w))
+                            continue; // zero padding contributes nothing
+                        for (uint32_t c = 0; c < cin; ++c) {
+                            const int8_t in = input[(uint32_t(iy) * w + uint32_t(ix)) * cin + c];
+                            const int8_t wt = weights[((f * 3 + ky) * 3 + kx) * cin + c];
+                            acc += int64_t(in) * int64_t(wt);
+                        }
+                    }
+                }
+                out[(y * w + x) * cout + f] =
+                    CpuRequantElement(acc, biasF16[f], combined, rcpOut);
+            }
+        }
+    }
+}
+
 } // namespace reference

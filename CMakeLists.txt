@@ -142,6 +142,47 @@ foreach(_pair ${M08_SCALES})
         COMMENT "dxc: quantize_probe.hlsl(scale=${_scale}) -> shaders/quantize_${_suf}.cso")
 endforeach()
 
+# M09: generalized INT8 GEMM (per-shape fixed-graph CSOs: K tiles + padded N
+# are compile-time because the magic-code immediates bake the strides) and
+# the requant pass (runtime, no intrinsics). Blob offsets are baked to match
+# the experiment's layouts (A@0 | B@Mp*K | bias | zeroTile / acc@0 | bias).
+# raw: KT, N, B_OFF=Mp*K, ZERO_OFF=Mp*K+K*Np(+Np*2 when a bias section exists)
+foreach(_pair raw_m16k64n16:4:16:1024:2048 raw_m32k64n32:4:32:2048:4096 raw_m16k256n16:16:16:4096:8192 raw_m64k144n16:9:16:9216:11552 raw_m64k144n32:9:32:9216:13888 raw_m256k64n256:4:256:16384:32768 raw_m256k256n256:16:256:65536:131072)
+    string(REPLACE ":" ";" _pairList ${_pair})
+    list(GET _pairList 0 _suf)
+    list(GET _pairList 1 _tiles)
+    list(GET _pairList 2 _n)
+    list(GET _pairList 3 _boff)
+    list(GET _pairList 4 _zoff)
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -enable-16bit-types -HV 2021
+                -E gemm_raw -D "GEMM_K_TILES=${_tiles}" -D "GEMM_N=${_n}"
+                -D "GEMM_B_OFF=${_boff}" -D "GEMM_ZERO_OFF=${_zoff}" -I "${SHADER_INC}"
+                -Fo ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+                ${SHADER_SRC}/gemm_i8.hlsl
+        DEPENDS ${SHADER_SRC}/gemm_i8.hlsl
+                ${SHADER_SRC}/../amd/AmdExtD3D/AmdExtD3DShaderIntrinsicsMatrixOps.hlsl
+        COMMENT "dxc: gemm_i8.hlsl(${_suf}) -> shaders/gemm_${_suf}.cso")
+endforeach()
+# requant: N (padded), N_REAL, ACC_OFF=0, BIAS_OFF=Mp*Np*4
+foreach(_pair requant_m32n24:32:24:4096 requant_m64n16:16:16:4096 requant_m64n20:32:20:8192)
+    string(REPLACE ":" ";" _pairList ${_pair})
+    list(GET _pairList 0 _suf)
+    list(GET _pairList 1 _n)
+    list(GET _pairList 2 _nreal)
+    list(GET _pairList 3 _biasoff)
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -enable-16bit-types -HV 2021
+                -E gemm_requant -D "GEMM_N=${_n}" -D "GEMM_N_REAL=${_nreal}"
+                -D "GEMM_ACC_OFF=0" -D "GEMM_BIAS_OFF=${_biasoff}" -I "${SHADER_INC}"
+                -Fo ${FSR4_SHADER_DIR}/gemm_${_suf}.cso
+                ${SHADER_SRC}/gemm_i8.hlsl
+        DEPENDS ${SHADER_SRC}/gemm_i8.hlsl
+        COMMENT "dxc: gemm_i8.hlsl(${_suf}) -> shaders/gemm_${_suf}.cso")
+endforeach()
+
 add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/vector_add.cso
     ${FSR4_SHADER_DIR}/int8_wmma_i8.cso
@@ -160,7 +201,17 @@ add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/quantize_s1.cso
     ${FSR4_SHADER_DIR}/quantize_s2p.cso
     ${FSR4_SHADER_DIR}/quantize_spow2.cso
-    ${FSR4_SHADER_DIR}/quantize_sfsr.cso)
+    ${FSR4_SHADER_DIR}/quantize_sfsr.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m16k64n16.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m32k64n32.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m16k256n16.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m64k144n16.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m64k144n32.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m256k64n256.cso
+    ${FSR4_SHADER_DIR}/gemm_raw_m256k256n256.cso
+    ${FSR4_SHADER_DIR}/gemm_requant_m32n24.cso
+    ${FSR4_SHADER_DIR}/gemm_requant_m64n16.cso
+    ${FSR4_SHADER_DIR}/gemm_requant_m64n20.cso)
 add_dependencies(rdna3-int8 compile_shaders)
 
 enable_testing()
@@ -184,3 +235,6 @@ add_test(NAME experiment_wmma_fp16 COMMAND rdna3-int8 run wmma-fp16)
 # M08 hardware test: quantization contract (incl. AMD's shipped QuantizeLinear
 # operator on this GPU) must pass.
 add_test(NAME experiment_quantization COMMAND rdna3-int8 run quantization)
+
+# M09 hardware test: INT8 GEMM/requant/conv kernels must pass on this machine.
+add_test(NAME experiment_kernels_int8 COMMAND rdna3-int8 run kernels-int8)

@@ -87,4 +87,29 @@ struct QuantErrorStats {
 QuantErrorStats ComputeQuantError(const float* ref, const int8_t* q,
                                   const float* dequant, size_t count);
 
+// --- M09: generalized INT8 GEMM + requantization (AMD FNB_CT2D contract) ---
+
+// Exact INT64-accumulating GEMM: out[m*N+n] = sum_k a[m*K+k]*b[k*N+n].
+// Row-major, no padding; the caller packs. INT64 detects what the GPU's
+// INT32 accumulation must not exceed (overflow guard lives with the caller).
+void CpuInt8Gemm(const int8_t* a, const int8_t* b, int64_t* out,
+                 uint32_t mCount, uint32_t nCount, uint32_t kCount);
+
+// One output element of the AMD FNB_CT2D requant store idiom (the M08/M09
+// contract), replicated in the source's exact fp32 operation order:
+//   round((float(acc) * (sIn*sW) + biasFp16) * (1/sOut)), ties-to-even,
+//   clamped to [-128, 127].
+int8_t CpuRequantElement(int64_t acc, uint16_t biasF16Bits,
+                         float combinedScale, float rcpOutScale);
+
+// Direct quantized 3x3 stride-1 pad-1 NHWC convolution (Cin channels in,
+// Cout out), int64 accumulation + the same requant idiom — the independent
+// check of the im2col+GEMM+requant pipeline.
+// input: H*W*Cin int8; weights: Cout*3*3*Cin int8 (ONNX RSCF order
+// [f][ky][kx][c]); bias: Cout fp16 bits; out: H*W*Cout int8.
+void CpuConv3x3p1I8(const int8_t* input, const int8_t* weights,
+                    const uint16_t* biasF16, int8_t* out,
+                    uint32_t h, uint32_t w, uint32_t cin, uint32_t cout,
+                    float inScale, float wScale, float outScale);
+
 } // namespace reference

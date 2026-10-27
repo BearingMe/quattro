@@ -23,4 +23,10 @@ int RunWmmaFp16();
 // executed on gfx1101 as the C09 hardware reference. Returns the CLI exit code.
 int RunQuantization();
 
+// M09 — generalized INT8 GEMM (runtime M/N, fixed-graph K, boundary tiles
+// via padded packing), AMD FNB_CT2D requantization at store, 3x3p1
+// convolution via im2col+GEMM, overflow guard, ISA/stats evidence and
+// benchmarks. Returns the CLI exit code.
+int RunInt8Kernels();
+
 } // namespace experiments

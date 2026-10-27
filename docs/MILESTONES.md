@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M08 complete (see per-milestone status) |
+| Status | Roadmap — M01–M09 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -564,7 +564,7 @@ This milestone proves numerical transformations, not end-to-end network quality.
 
 ### M09 — INT8 Matrix and Convolution Kernels
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-007-int8-kernels.md`](experiments/EXP-007-int8-kernels.md))
 
 #### Objective
 
@@ -584,24 +584,24 @@ Start with straightforward implementations. Investigate implicit GEMM, direct co
 
 #### Checkpoints
 
-- [ ] C01: Generalize the WMMA matrix operation.
-- [ ] C02: Support relevant non-multiple-of-tile dimensions.
-- [ ] C03: Implement one convolution configuration.
-- [ ] C04: Validate convolution against a CPU reference.
-- [ ] C05: Integrate quantization scales.
-- [ ] C06: Implement requantization.
-- [ ] C07: Measure register and memory behavior.
-- [ ] C08: Benchmark representative tensor shapes.
+- [x] C01: Generalize the WMMA matrix operation.
+- [x] C02: Support relevant non-multiple-of-tile dimensions.
+- [x] C03: Implement one convolution configuration.
+- [x] C04: Validate convolution against a CPU reference.
+- [x] C05: Integrate quantization scales.
+- [x] C06: Implement requantization.
+- [x] C07: Measure register and memory behavior.
+- [x] C08: Benchmark representative tensor shapes.
 
 #### Validation Gate
 
-- [ ] Matrix multiplication handles required dimensions.
-- [ ] Convolution matches the quantized CPU reference.
-- [ ] Boundary tiles are correct.
-- [ ] Scaling is applied correctly.
-- [ ] Accumulation overflow is prevented or detected.
-- [ ] Native matrix instructions remain present.
-- [ ] Performance measurements are reproducible.
+- [x] Matrix multiplication handles required dimensions.
+- [x] Convolution matches the quantized CPU reference.
+- [x] Boundary tiles are correct.
+- [x] Scaling is applied correctly.
+- [x] Accumulation overflow is prevented or detected.
+- [x] Native matrix instructions remain present.
+- [x] Performance measurements are reproducible.
 
 #### Deliverables
 

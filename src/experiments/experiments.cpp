@@ -42,6 +42,7 @@ size_t CountIsaLines(const std::string& isa, const char* needle) {
     return count;
 }
 
+
 bool SaveReport(const std::filesystem::path& dir, const std::string& name, const std::string& content) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
@@ -68,6 +69,14 @@ std::filesystem::path ReportsDirM08() {
         return {};
     const std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
     return exeDir / ".." / "reports" / "m08";
+}
+
+std::filesystem::path ReportsDirM09() {
+    wchar_t exePathW[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exePathW, MAX_PATH) == 0)
+        return {};
+    const std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+    return exeDir / ".." / "reports" / "m09";
 }
 
 } // namespace
@@ -187,7 +196,7 @@ int RunWmmaInt8() {
         std::vector<int32_t> outWarmup;
         std::vector<int32_t> outTimed;
         if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(input), sizeof(initC),
-                              /*groupCount=*/1, /*warmup=*/1, /*timed=*/100,
+                              /*gridX=*/1, /*gridY=*/1, /*warmup=*/1, /*timed=*/100,
                               input, outWarmup, outTimed, timing, error)) {
             std::fprintf(stderr, "error: %s\n", error.c_str());
             ok = false;
@@ -380,7 +389,7 @@ int RunWmmaFp16() {
         std::vector<int32_t> outWarmup;
         std::vector<int32_t> outTimed;
         if (!gpu::RunGemmTile(ctx, rootSignature, pso, probe.inputBytes, probe.outputBytes,
-                              1, 1, 100, probe.input,
+                              1, 1, 1, 100, probe.input,
                               outWarmup, outTimed, timing, error)) {
             std::fprintf(stderr, "error: %s\n", error.c_str());
             ok = false;
@@ -534,7 +543,7 @@ int RunWmmaFp16() {
                 std::vector<int32_t> outWarmup;
                 std::vector<int32_t> outTimed;
                 if (!gpu::RunGemmTile(ctx, rootSignature, pso, inputBytes, kGemms * 1024u,
-                                      kGemms, 10, 100, input,
+                                      kGemms, 1, 10, 100, input,
                                       outWarmup, outTimed, timing, error)) {
                     std::fprintf(stderr, "error: %s\n", error.c_str());
                     ok = false;
@@ -1048,7 +1057,8 @@ int RunQuantization() {
             std::vector<int32_t> outWarmup;
             std::vector<int32_t> outTimed;
             if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(inputs), 256,
-                                  1, 1, 1, inputs, outWarmup, outTimed, timing, error)) {
+                                  1, 1, 1, 1, inputs,
+                                  outWarmup, outTimed, timing, error)) {
                 std::fprintf(stderr, "error: %s\n", error.c_str());
                 ok = false;
                 break;
@@ -1108,9 +1118,11 @@ int RunQuantization() {
                     std::vector<int32_t> run2;
                     std::vector<int32_t> outTimed;
                     if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(specialIn), 256,
-                                          1, 1, 1, specialIn, run1, outTimed, timing, error) ||
+                                          1, 1, 1, 1, specialIn,
+                                          run1, outTimed, timing, error) ||
                         !gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(specialIn), 256,
-                                          1, 1, 1, specialIn, run2, outTimed, timing, error)) {
+                                          1, 1, 1, 1, specialIn,
+                                          run2, outTimed, timing, error)) {
                         std::fprintf(stderr, "error: %s\n", error.c_str());
                         ok = false;
                     } else {
@@ -1124,7 +1136,8 @@ int RunQuantization() {
                         std::vector<int32_t> run3;
                         std::vector<int32_t> outTimed3;
                         if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(rotated), 256,
-                                              1, 1, 1, rotated, run3, outTimed3, timing, error)) {
+                                              1, 1, 1, 1, rotated,
+                                              run3, outTimed3, timing, error)) {
                             std::fprintf(stderr, "error: %s\n", error.c_str());
                             ok = false;
                         }
@@ -1198,6 +1211,499 @@ int RunQuantization() {
     }
 
     std::printf("%s\n", ok ? "quantization probe: PASS" : "quantization probe: FAIL");
+    return ok ? 0 : 1;
+}
+
+int RunInt8Kernels() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
+    // Deterministic LCG (shared with the other experiments' data style).
+    uint32_t seed = 0x9E3779B9u;
+    const auto next01 = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return float(seed >> 8) / float(1 << 24);
+    };
+    const auto nextI8 = [&](int lo, int hi) {
+        return int8_t(lo + int(next01() * float(hi - lo + 1)));
+    };
+
+    bool ok = true;
+
+    // --- Device + extensions (analyzer needed for ISA evidence, C07). ---
+    gpu::DeviceContext ctx;
+    std::string error;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return 1;
+    }
+    PrintAdapter(ctx.adapter);
+
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !error.empty()) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    if (!ext.analyzer) {
+        std::fprintf(stderr, "error: shader analyzer unavailable - ISA evidence impossible\n");
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+
+    gpu::ComPtr<ID3D12RootSignature> rootSignature;
+    if (!gpu::CreateGemmTileRootSignature(ctx, rootSignature, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+
+    // Loads a CSO, creates the analyzer PSO (usable for dispatch), dumps ISA.
+    auto LoadKernelPso = [&](const char* csoName, bool requireWmma) ->
+                         gpu::ComPtr<ID3D12PipelineState> {
+        std::vector<uint8_t> cso;
+        if (!gpu::LoadShaderBytecode(csoName, cso, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            return nullptr;
+        }
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = rootSignature.Get();
+        desc.CS = {cso.data(), cso.size()};
+        gpu::ComPtr<ID3D12PipelineState> pso;
+        AmdExtD3DPipelineHandle handle = nullptr;
+        AmdExtD3DComputeShaderStats stats{};
+        if (!gpu::CreateAnalyzedComputePipeline(ext, desc, pso, handle, stats, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            return nullptr;
+        }
+        std::string isa;
+        std::string statsLine;
+        if (gpu::GetPipelineIsa(ext, handle, isa, statsLine, error)) {
+            SaveReport(ReportsDirM09(), std::string(csoName) + ".isa", isa);
+            const size_t wmmaCount = CountIsaLines(isa, "v_wmma_i32_16x16x16_iu8");
+            std::printf("kernel %-22s | wmma x%zu | %s\n", csoName, wmmaCount, statsLine.c_str());
+            if (requireWmma && wmmaCount == 0) {
+                std::fprintf(stderr, "error: native WMMA missing from %s ISA\n", csoName);
+                ok = false;
+            }
+        } else {
+            std::fprintf(stderr, "error: ISA unavailable for %s: %s\n", csoName, error.c_str());
+            ok = false;
+        }
+        return pso;
+    };
+
+    std::printf("kernels (analyzer PSOs, ISA evidence -> build/reports/m09/):\n");
+    // Per-shape fixed-graph CSOs (K tiles + padded M/N + blob offsets baked
+    // as -D defines — the ML2Code codegen model; see gemm_i8.hlsl).
+    const gpu::ComPtr<ID3D12PipelineState> rawM16K64N16 = LoadKernelPso("gemm_raw_m16k64n16", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM32K64N32 = LoadKernelPso("gemm_raw_m32k64n32", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM16K256N16 = LoadKernelPso("gemm_raw_m16k256n16", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM64K144N16 = LoadKernelPso("gemm_raw_m64k144n16", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM64K144N32 = LoadKernelPso("gemm_raw_m64k144n32", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM256K64N256 = LoadKernelPso("gemm_raw_m256k64n256", true);
+    const gpu::ComPtr<ID3D12PipelineState> rawM256K256N256 = LoadKernelPso("gemm_raw_m256k256n256", true);
+    const gpu::ComPtr<ID3D12PipelineState> requantM32N24 = LoadKernelPso("gemm_requant_m32n24", false);
+    const gpu::ComPtr<ID3D12PipelineState> requantM64N16 = LoadKernelPso("gemm_requant_m64n16", false);
+    const gpu::ComPtr<ID3D12PipelineState> requantM64N20 = LoadKernelPso("gemm_requant_m64n20", false);
+    if (!ok) {
+        // Analyzer rejects are fatal — dispatching a null PSO would crash.
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+
+    // --- Part 1 (C01/C02): GEMM correctness, aligned + boundary shapes. ---
+    struct GemmShape {
+        uint32_t m, n, k;
+        uint32_t mp, np; // padded (baked into the CSO)
+        ID3D12PipelineState* pso;
+        const char* label;
+    };
+    const GemmShape shapes[] = {
+        {16, 16, 64, 16, 16, rawM16K64N16.Get(), "16x16x64"},
+        {20, 24, 64, 32, 32, rawM32K64N32.Get(), "20x24x64 (boundary)"},
+        {16, 16, 256, 16, 16, rawM16K256N16.Get(), "16x16x256"},
+    };
+    for (const GemmShape& shape : shapes) {
+        if (!ok)
+            break;
+        // Packed operands: bounded range keeps the int32 accumulator safe.
+        std::vector<int8_t> a(size_t(shape.mp) * shape.k);
+        std::vector<int8_t> b(size_t(shape.k) * shape.np);
+        for (uint32_t m = 0; m < shape.m; ++m)
+            for (uint32_t k = 0; k < shape.k; ++k)
+                a[m * shape.k + k] = nextI8(-40, 40);
+        for (uint32_t k = 0; k < shape.k; ++k)
+            for (uint32_t n = 0; n < shape.n; ++n)
+                b[k * shape.np + n] = nextI8(-40, 40);
+
+        // Overflow guard (gate: prevented): exact per-output bound.
+        int64_t bound = 0;
+        for (uint32_t m = 0; m < shape.m; ++m)
+            for (uint32_t n = 0; n < shape.n; ++n) {
+                int64_t boundMN = 0;
+                for (uint32_t k = 0; k < shape.k; ++k)
+                    boundMN += int64_t(std::abs(a[m * shape.k + k])) *
+                               int64_t(std::abs(b[k * shape.np + n]));
+                bound = std::max(bound, boundMN);
+            }
+        if (bound >= (1LL << 31)) {
+            std::fprintf(stderr, "error: overflow guard should have passed for %s "
+                                 "(bound %lld) - data/policy inconsistency\n",
+                         shape.label, (long long)bound);
+            ok = false;
+            break;
+        }
+
+        // Blob: A | B | zeroTile (int32 16x16, accumulator init; the Fill
+        // opcode is driver-rejected — loaded instead, M06 pattern). Blob
+        // layout matches the CSO's baked offsets.
+        std::vector<uint8_t> blob(size_t(shape.mp) * shape.k + size_t(shape.k) * shape.np + 1024);
+        memcpy(blob.data(), a.data(), a.size());
+        memcpy(blob.data() + a.size(), b.data(), b.size());
+        memset(blob.data() + a.size() + b.size(), 0, 1024);
+
+        gpu::MatmulRunResult timing;
+        std::vector<int32_t> outWarmup;
+        std::vector<int32_t> outTimed;
+        if (!gpu::RunGemmTile(ctx, rootSignature, shape.pso, blob.size(),
+                              shape.mp * shape.np * 4u, shape.np / 16, shape.mp / 16,
+                              1, 1, blob.data(), outWarmup, outTimed, timing, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
+
+        // CPU reference over the PADDED operands (padding must not change
+        // the real outputs), cropped to the real M/N.
+        std::vector<int64_t> ref(size_t(shape.mp) * shape.np);
+        reference::CpuInt8Gemm(a.data(), b.data(), ref.data(), shape.mp, shape.np, shape.k);
+        size_t mismatches = 0;
+        for (uint32_t m = 0; m < shape.m; ++m)
+            for (uint32_t n = 0; n < shape.n; ++n)
+                if (outWarmup[size_t(m) * shape.np + n] != ref[size_t(m) * shape.np + n]) {
+                    if (mismatches < 4)
+                        std::fprintf(stderr, "  [%s] (%u,%u) gpu %d vs ref %lld\n",
+                                     shape.label, m, n, outWarmup[size_t(m) * shape.np + n],
+                                     (long long)ref[size_t(m) * shape.np + n]);
+                    ++mismatches;
+                }
+        // Idempotency: timed snapshot equals warmup snapshot.
+        const bool idempotent = memcmp(outTimed.data(), outWarmup.data(),
+                                       outWarmup.size() * sizeof(int32_t)) == 0;
+        std::printf("gemm_raw %-18s | %zu mismatches | idempotent %s | min %.2f us\n",
+                    shape.label, mismatches, idempotent ? "OK" : "FAIL",
+                    timing.minMs * 1000.0);
+        if (mismatches || !idempotent)
+            ok = false;
+    }
+
+    // --- Part 2 (C05/C06): requant at store vs the AMD FNB_CT2D contract. ---
+    {
+        const uint32_t m = 20, n = 24, k = 64;
+        const uint32_t mp = 32, np = 32;
+        const float sIn = 0.014884727f;
+        const float sW = 0.02f;
+        const float sOut = 0.5f;
+        const float combined = sIn * sW;   // fp32 product — same op as the shader
+        const float rcpOut = 1.0f / sOut;
+
+        std::vector<int8_t> a(size_t(mp) * k);
+        std::vector<int8_t> b(size_t(k) * np);
+        for (uint32_t i = 0; i < m; ++i)
+            for (uint32_t kk = 0; kk < k; ++kk)
+                a[i * k + kk] = nextI8(-40, 40);
+        for (uint32_t kk = 0; kk < k; ++kk)
+            for (uint32_t j = 0; j < n; ++j)
+                b[kk * np + j] = nextI8(-40, 40);
+
+        std::vector<uint16_t> bias(np, 0); // padded bias (unused lanes)
+        for (uint32_t j = 0; j < n; ++j)
+            bias[j] = core::F32ToF16(float(int(next01() * 21) - 10) * 0.25f);
+
+        std::vector<int64_t> ref64(size_t(mp) * np);
+        reference::CpuInt8Gemm(a.data(), b.data(), ref64.data(), mp, np, k);
+        std::vector<int8_t> refQ(size_t(m) * n);
+        for (uint32_t i = 0; i < m; ++i)
+            for (uint32_t j = 0; j < n; ++j)
+                refQ[i * n + j] = reference::CpuRequantElement(
+                    ref64[size_t(i) * np + j], bias[j], combined, rcpOut);
+
+        // Blob for the requant pass: raw accumulator (int32, padded) | bias.
+        // Layout matches the CSO's baked offsets (acc at 0, bias after).
+        std::vector<uint8_t> blob(size_t(mp) * np * 4 + np * 2);
+        for (size_t i = 0; i < ref64.size(); ++i) {
+            const int32_t v = int32_t(ref64[i]); // guard-verified: no wrap
+            memcpy(blob.data() + i * 4, &v, 4);
+        }
+        memcpy(blob.data() + size_t(mp) * np * 4, bias.data(), np * 2);
+
+        gpu::MatmulRunResult timing;
+        std::vector<int32_t> outWarmup;
+        std::vector<int32_t> outTimed;
+        if (!gpu::RunGemmTile(ctx, rootSignature, requantM32N24.Get(), blob.size(), mp * np,
+                              (mp * np / 4 + 63) / 64, 1, 1, 1, blob.data(),
+                              outWarmup, outTimed, timing, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+        } else {
+            const uint8_t* qHw = reinterpret_cast<const uint8_t*>(outWarmup.data());
+            size_t mismatches = 0;
+            for (uint32_t i = 0; i < m; ++i)
+                for (uint32_t j = 0; j < n; ++j)
+                    if (int8_t(qHw[size_t(i) * np + j]) != refQ[i * n + j]) {
+                        if (mismatches < 4)
+                            std::fprintf(stderr, "  requant (%u,%u): gpu %d vs ref %d\n",
+                                         i, j, int8_t(qHw[size_t(i) * np + j]), refQ[i * n + j]);
+                        ++mismatches;
+                    }
+            std::printf("gemm_requant 20x24x64 | %zu mismatches vs AMD-contract reference "
+                        "(sIn=%.9g sW=%.9g sOut=%.9g) | min %.2f us\n",
+                        mismatches, sIn, sW, sOut, timing.minMs * 1000.0);
+            if (mismatches)
+                ok = false;
+        }
+    }
+
+    // --- Part 3 (overflow guard): the pack-time bound vs INT32 accumulation.
+    // Fact: int8 x int8 products accumulate in INT32 without overflow for any
+    // K <= ~133k even at the full [-128, 127] operand range (127*127*K <
+    // 2^31); the guard exists for pathological K / large accumulated inits.
+    // Demonstrate both sides of the policy on synthetic bounds. ---
+    {
+        const int64_t boundK256 = int64_t(256) * 127 * 127;      // 4.13e6
+        const int64_t boundK200k = int64_t(200000) * 127 * 127;  // 3.23e9 > 2^31
+        const bool pass256 = boundK256 < (1LL << 31);
+        const bool refuse200k = boundK200k >= (1LL << 31);
+        std::printf("overflow guard: K=256 worst-case bound %lld -> allowed; "
+                    "K=200000 bound %lld -> %s\n",
+                    (long long)boundK256, (long long)boundK200k,
+                    refuse200k ? "REFUSED (prevented)" : "NOT REFUSED");
+        if (!pass256 || !refuse200k)
+            ok = false;
+    }
+
+    // --- Part 4 (C03/C04): 3x3 stride-1 pad-1 convolution via
+    // im2col+GEMM+requant vs the direct quantized CPU convolution. ---
+    {
+        const uint32_t h = 8, w = 8, cin = 16, cout = 16; // aligned conv
+        const uint32_t h2 = 7, w2 = 7, cout2 = 20;        // boundary conv (M=49, N=20)
+        const float sIn = 0.014884727f;
+        const float sW = 0.02f;
+        const float sOut = 0.5f;
+
+        for (const bool boundary : {false, true}) {
+            if (!ok)
+                break;
+            const uint32_t hh = boundary ? h2 : h;
+            const uint32_t ww = boundary ? w2 : w;
+            const uint32_t co = boundary ? cout2 : cout;
+            const uint32_t mm = hh * ww; // real GEMM rows
+            const uint32_t mp = (mm + 15) & ~15u;
+            const uint32_t np = (co + 15) & ~15u;
+            const uint32_t k = 9 * cin;
+
+            // Deterministic int8 input/weights with negatives + bias. Two
+            // input copies: unpadded (the CPU reference's layout, it does its
+            // own bounds-checked zero padding) and padded (for im2col pack).
+            std::vector<int8_t> inputUnpadded(size_t(hh) * ww * cin);
+            std::vector<int8_t> inputPadded(size_t(hh + 2) * (ww + 2) * cin, 0);
+            std::vector<int8_t> weights(size_t(co) * 9 * cin);
+            std::vector<uint16_t> bias(np, 0);
+            for (uint32_t y = 0; y < hh; ++y)
+                for (uint32_t x = 0; x < ww; ++x)
+                    for (uint32_t c = 0; c < cin; ++c) {
+                        const int8_t v = nextI8(-40, 40);
+                        inputUnpadded[(y * ww + x) * cin + c] = v;
+                        inputPadded[((y + 1) * (ww + 2) + (x + 1)) * cin + c] = v;
+                    }
+            for (uint32_t i = 0; i < weights.size(); ++i)
+                weights[i] = nextI8(-32, 32);
+            for (uint32_t f = 0; f < co; ++f)
+                bias[f] = core::F32ToF16(float(int(next01() * 17) - 8) * 0.25f);
+
+            // CPU direct conv reference (the independent check).
+            std::vector<int8_t> convRef(size_t(hh) * ww * co);
+            reference::CpuConv3x3p1I8(inputUnpadded.data(), weights.data(), bias.data(),
+                                      convRef.data(), hh, ww, cin, co, sIn, sW, sOut);
+
+            // CPU im2col pack: A (Mp rows x K) zero-padded; B (K x Np).
+            std::vector<int8_t> a(size_t(mp) * k, 0);
+            std::vector<int8_t> b(size_t(k) * np, 0);
+            for (uint32_t y = 0; y < hh; ++y)
+                for (uint32_t x = 0; x < ww; ++x)
+                    for (uint32_t ky = 0; ky < 3; ++ky)
+                        for (uint32_t kx = 0; kx < 3; ++kx) {
+                            const int32_t iy = int32_t(y + ky) - 1;
+                            const int32_t ix = int32_t(x + kx) - 1;
+                            if (iy < 0 || iy >= int32_t(hh) || ix < 0 || ix >= int32_t(ww))
+                                continue; // zero pad
+                            for (uint32_t c = 0; c < cin; ++c) {
+                                const uint32_t kk = (ky * 3 + kx) * cin + c;
+                                a[(y * ww + x) * k + kk] =
+                                    inputPadded[(uint32_t(iy + 1) * (ww + 2) + uint32_t(ix + 1)) * cin + c];
+                            }                        }
+            for (uint32_t f = 0; f < co; ++f)
+                for (uint32_t ky = 0; ky < 3; ++ky)
+                    for (uint32_t kx = 0; kx < 3; ++kx)
+                        for (uint32_t c = 0; c < cin; ++c) {
+                            const uint32_t kk = (ky * 3 + kx) * cin + c;
+                            b[size_t(kk) * np + f] = weights[(f * 9 + ky * 3 + kx) * cin + c];
+                        }
+
+            // Overflow guard on the actual packed data.
+            int64_t bound = 0;
+            for (uint32_t m = 0; m < mm; ++m)
+                for (uint32_t n = 0; n < co; ++n) {
+                    int64_t boundMN = 0;
+                    for (uint32_t kk = 0; kk < k; ++kk)
+                        boundMN += int64_t(std::abs(a[size_t(m) * k + kk])) *
+                                   int64_t(std::abs(b[size_t(kk) * np + n]));
+                    bound = std::max(bound, boundMN);
+                }
+            if (bound >= (1LL << 31)) {
+                std::fprintf(stderr, "error: conv overflow guard refused valid data\n");
+                ok = false;
+                break;
+            }
+
+            // Blob: A | B | bias | zeroTile — layout matches the CSO's baked
+            // offsets (A@0, B@Mp*K, bias@Mp*K+K*Np, zero after bias).
+            std::vector<uint8_t> blob(a.size() + b.size() + np * 2 + 1024);
+            memcpy(blob.data(), a.data(), a.size());
+            memcpy(blob.data() + a.size(), b.data(), b.size());
+            memcpy(blob.data() + a.size() + b.size(), bias.data(), np * 2);
+            memset(blob.data() + a.size() + b.size() + np * 2, 0, 1024);
+
+            gpu::MatmulRunResult timing;
+            std::vector<int32_t> accWarmup;
+            std::vector<int32_t> accTimed;
+            ID3D12PipelineState* convGemmPso = boundary ? rawM64K144N32.Get() : rawM64K144N16.Get();
+            if (!gpu::RunGemmTile(ctx, rootSignature, convGemmPso, blob.size(), mp * np * 4u,
+                                  np / 16, mp / 16, 1, 1, blob.data(),
+                                  accWarmup, accTimed, timing, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+                break;
+            }
+
+            // Requant input blob: raw accumulator | bias (layout matches the
+            // requant CSO's baked offsets: acc@0, bias@Mp*Np*4).
+            std::vector<uint8_t> rqBlob(size_t(mp) * np * 4 + np * 2);
+            memcpy(rqBlob.data(), accWarmup.data(), size_t(mp) * np * 4);
+            memcpy(rqBlob.data() + size_t(mp) * np * 4, bias.data(), np * 2);
+            gpu::MatmulRunResult rqTiming;
+            std::vector<int32_t> qWarmup;
+            std::vector<int32_t> qTimed;
+            ID3D12PipelineState* rqPso = boundary ? requantM64N20.Get() : requantM64N16.Get();
+            if (!gpu::RunGemmTile(ctx, rootSignature, rqPso, rqBlob.size(), mp * np,
+                                  (mp * np / 4 + 63) / 64, 1, 1, 1, rqBlob.data(),
+                                  qWarmup, qTimed, rqTiming, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+                break;
+            }
+
+            const uint8_t* qHw = reinterpret_cast<const uint8_t*>(qWarmup.data());
+            size_t mismatches = 0;
+            for (uint32_t y = 0; y < hh; ++y)
+                for (uint32_t x = 0; x < ww; ++x)
+                    for (uint32_t f = 0; f < co; ++f)
+                        if (int8_t(qHw[(size_t(y) * ww + x) * np + f]) !=
+                            convRef[(size_t(y) * ww + x) * co + f]) {
+                            if (mismatches < 4)
+                                std::fprintf(stderr, "  conv %s (%u,%u,f%u): gpu %d vs ref %d\n",
+                                             boundary ? "boundary" : "aligned", y, x, f,
+                                             int8_t(qHw[(size_t(y) * ww + x) * np + f]),
+                                             convRef[(size_t(y) * ww + x) * co + f]);
+                            ++mismatches;
+                        }
+            std::printf("conv3x3p1 %dx%dx%d->%d %s | %zu mismatches vs direct quantized CPU conv\n",
+                        hh, ww, cin, co, boundary ? "(boundary)" : "        ", mismatches);
+            if (mismatches)
+                ok = false;
+        }
+    }
+
+    // --- Part 5 (C08): benchmarks, run twice for reproducibility. ---
+    if (ok) {
+        const auto benchGemm = [&](ID3D12PipelineState* pso, uint32_t mp, uint32_t np,
+                                   uint32_t k, double& minUs) -> bool {
+            std::vector<int8_t> a(size_t(mp) * k);
+            std::vector<int8_t> b(size_t(k) * np);
+            for (uint32_t i = 0; i < a.size(); ++i)
+                a[i] = nextI8(-32, 32);
+            for (uint32_t i = 0; i < b.size(); ++i)
+                b[i] = nextI8(-32, 32);
+            // Blob layout matches the CSO's baked offsets: A@0 | B@Mp*K | zero.
+            std::vector<uint8_t> blob(a.size() + b.size() + 1024);
+            memcpy(blob.data(), a.data(), a.size());
+            memcpy(blob.data() + a.size(), b.data(), b.size());
+            memset(blob.data() + a.size() + b.size(), 0, 1024);
+            gpu::MatmulRunResult timing;
+            std::vector<int32_t> outWarmup;
+            std::vector<int32_t> outTimed;
+            if (!gpu::RunGemmTile(ctx, rootSignature, pso, blob.size(), mp * np * 4u,
+                                  np / 16, mp / 16, 10, 100, blob.data(),
+                                  outWarmup, outTimed, timing, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                return false;
+            }
+            minUs = timing.minMs * 1000.0;
+            return true;
+        };
+
+        double rawK64[2];
+        double rawK256[2];
+        // Discarded warm cycle: cross-run clock state dominates otherwise
+        // (M07 finding: within-run min-of-100 is the reliable metric).
+        {
+            double discard = 0.0;
+            benchGemm(rawM256K64N256.Get(), 256, 256, 64, discard);
+            benchGemm(rawM256K256N256.Get(), 256, 256, 256, discard);
+        }
+        for (uint32_t r = 0; r < 2 && ok; ++r) {
+            if (!benchGemm(rawM256K64N256.Get(), 256, 256, 64, rawK64[r]) ||
+                !benchGemm(rawM256K256N256.Get(), 256, 256, 256, rawK256[r]))
+                ok = false;
+        }
+        if (ok) {
+            const double k64Spread = rawK64[0] > 0 ? std::fabs(rawK64[1] - rawK64[0]) / rawK64[0] : 1.0;
+            const double k256Spread = rawK256[0] > 0 ? std::fabs(rawK256[1] - rawK256[0]) / rawK256[0] : 1.0;
+            std::printf("benchmark gemm 256x256: K64 min %.2f/%.2f us (spread %.1f%%), "
+                        "K256 min %.2f/%.2f us (spread %.1f%%), 10 warmup + 100 timed\n",
+                        rawK64[0], rawK64[1], k64Spread * 100.0,
+                        rawK256[0], rawK256[1], k256Spread * 100.0);
+            if (k64Spread > 0.10 || k256Spread > 0.10) {
+                std::fprintf(stderr, "error: benchmark reproducibility spread > 10%%\n");
+                ok = false;
+            }
+        }
+    }
+
+    std::string queueErrors;
+    size_t benignCount = 0;
+    if (!gpu::InfoQueueCleanWithFilter(
+            ctx,
+            [](const D3D12_MESSAGE& msg) {
+                if (!msg.pDescription)
+                    return false;
+                const char* desc = msg.pDescription;
+                return strstr(desc, "GPU-BASED VALIDATION") != nullptr &&
+                       strstr(desc, "Root descriptor access out of bounds") != nullptr &&
+                       strstr(desc, "Root Parameter Index: [2]") != nullptr;
+            },
+            benignCount, queueErrors)) {
+        std::fprintf(stderr, "%s", queueErrors.c_str());
+        ok = false;
+    } else {
+        std::printf("diagnostics: no unexplained error-severity messages (%zu known-benign "
+                    "GBAV intrinsics-dummy reports, see EXP-004)\n", benignCount);
+    }
+
+    gpu::ReleaseAmdExtensions(ext);
+    std::printf("%s\n", ok ? "int8 kernels probe: PASS" : "int8 kernels probe: FAIL");
     return ok ? 0 : 1;
 }
 

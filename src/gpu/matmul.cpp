@@ -81,7 +81,8 @@ D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
 
 bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
                  ComPtr<ID3D12PipelineState> pso, size_t inputBytes, size_t outputBytes,
-                 uint32_t groupCount, uint32_t warmup, uint32_t timed, const void* input,
+                 uint32_t gridX, uint32_t gridY, uint32_t warmup, uint32_t timed,
+                 const void* input,
                  std::vector<int32_t>& outPostWarmup, std::vector<int32_t>& outPostTimed,
                  MatmulRunResult& timing, std::string& error) {
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -191,7 +192,7 @@ bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
     list->SetComputeRootUnorderedAccessView(2, bufDummy->GetGPUVirtualAddress());
 
     for (uint32_t i = 0; i < warmup; ++i)
-        list->Dispatch(groupCount, 1, 1);
+        list->Dispatch(gridX, gridY, 1);
 
     // Correctness snapshot: exactly the state after `warmup` dispatches.
     D3D12_RESOURCE_BARRIER outToCopy1 = TransitionBarrier(bufOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -202,12 +203,12 @@ bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
                                                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     list->ResourceBarrier(1, &outToUav2);
 
-    // Timed loop: each dispatch re-loads its inputs (initC comes from the
-    // input SRV, not from the output tile), so the workload is idempotent per
-    // dispatch — the timed snapshot must equal the post-warmup snapshot.
+    // Timed loop: each dispatch re-loads its inputs (the workload must be
+    // idempotent per dispatch — the timed snapshot must equal the post-warmup
+    // snapshot; the experiment verifies this).
     for (uint32_t i = 0; i < timed; ++i) {
         list->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i * 2);
-        list->Dispatch(groupCount, 1, 1);
+        list->Dispatch(gridX, gridY, 1);
         list->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i * 2 + 1);
     }
 
