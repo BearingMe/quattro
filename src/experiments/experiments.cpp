@@ -246,6 +246,368 @@ int RunWmmaInt8() {
     return ok ? 0 : 1;
 }
 
+int RunWmmaFp16() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
+    // --- FP16 single-tile correctness (C01/C02): values in [-1, 1] keep the
+    // fp16-accumulator error bounded; full byte-range magnitudes are not the
+    // fp16 probe's point (documented tolerance compare, not bit-exact). ---
+    uint16_t fa[256];
+    uint16_t fb[256];
+    for (uint32_t i = 0; i < 256; ++i) {
+        // All arithmetic in float: (i % 17) - 8 in uint32 would underflow.
+        const float av = float(i % 17) * 0.125f - 1.0f;                    // [-1, 1]
+        const float bv = float((i * 7u) % 13u) * 0.125f - 0.75f;           // [-0.75, 0.75]
+        fa[i] = reference::F32ToF16(av);
+        fb[i] = reference::F32ToF16(bv);
+    }
+    float initF32[256];
+    for (uint32_t i = 0; i < 256; ++i)
+        initF32[i] = float(i % 9) - 4.0f;
+    uint16_t initF16[256];
+    for (uint32_t i = 0; i < 256; ++i)
+        initF16[i] = reference::F32ToF16(initF32[i]);
+
+    float expectedF32acc[256];
+    uint16_t expectedF16acc[256];
+    reference::CpuF16Matmul16x16x16(fa, fb, initF32, expectedF32acc, 32);
+    reference::CpuF16Matmul16x16x16(fa, fb, initF16, expectedF16acc, 16);
+
+    uint8_t f32accInput[512 + 512 + 1024];
+    uint8_t f16accInput[512 + 512 + 512];
+    memcpy(f32accInput, fa, 512);
+    memcpy(f32accInput + 512, fb, 512);
+    memcpy(f32accInput + 1024, initF32, 1024);
+    memcpy(f16accInput, fa, 512);
+    memcpy(f16accInput + 512, fb, 512);
+    memcpy(f16accInput + 1024, initF16, 512);
+
+    // Tolerances: per-product is exact in fp32 (11-bit mantissas -> 22-bit
+    // product); the [U] hardware accumulation order differs from the CPU's
+    // sequential order by at most the order-swap rounding budget. 0.05 covers
+    // 16 products of magnitude <= 1 with partial sums <= 16 in fp16-accum;
+    // the fp32-accum tolerance is far tighter in practice (printed).
+    constexpr float kTolF32acc = 2e-3f;
+    constexpr float kTolF16acc = 0.06f;
+
+    // --- Device + extensions (same path as M06). ---
+    gpu::DeviceContext ctx;
+    std::string error;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return 1;
+    }
+    PrintAdapter(ctx.adapter);
+
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !error.empty()) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    if (!ext.waveMatrixSupported || !ext.analyzer) {
+        std::fprintf(stderr, "error: WaveMatrix intrinsics or analyzer unsupported\n");
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+
+    gpu::ComPtr<ID3D12RootSignature> rootSignature;
+    if (!gpu::CreateGemmTileRootSignature(ctx, rootSignature, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+
+    const std::filesystem::path reportsDir = ReportsDir();
+    struct TileProbe {
+        const char* cso;
+        const char* label;
+        bool fp16Accumulator;
+        size_t outputBytes;
+        const void* input;
+        size_t inputBytes;
+    };
+    const TileProbe tileProbes[] = {
+        {"fp16_wmma_f32acc", "fp16 wmma ->f32 acc", false, 1024, f32accInput, sizeof(f32accInput)},
+        {"fp16_wmma_f16acc", "fp16 wmma ->f16 acc", true, 512, f16accInput, sizeof(f16accInput)},
+    };
+
+    bool ok = true;
+    for (const TileProbe& probe : tileProbes) {
+        std::vector<uint8_t> cso;
+        if (!gpu::LoadShaderBytecode(probe.cso, cso, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = rootSignature.Get();
+        psoDesc.CS = {cso.data(), cso.size()};
+
+        gpu::ComPtr<ID3D12PipelineState> pso;
+        AmdExtD3DPipelineHandle handle = nullptr;
+        AmdExtD3DComputeShaderStats stats{};
+        if (!gpu::CreateAnalyzedComputePipeline(ext, psoDesc, pso, handle, stats, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
+        std::string isa;
+        std::string statsLine;
+        if (!gpu::GetPipelineIsa(ext, handle, isa, statsLine, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
+        const std::string isaFile = std::string(probe.cso) + ".isa";
+        const bool saved = SaveReport(reportsDir, isaFile, isa);
+        const size_t wmmaF32 = CountIsaLines(isa, "v_wmma_f32_16x16x16_f16");
+        const size_t wmmaF16 = CountIsaLines(isa, "v_wmma_f16_16x16x16_f16");
+
+        gpu::MatmulRunResult timing;
+        std::vector<int32_t> outWarmup;
+        std::vector<int32_t> outTimed;
+        if (!gpu::RunGemmTile(ctx, rootSignature, pso, probe.inputBytes, probe.outputBytes,
+                              1, 1, 100, probe.input,
+                              outWarmup, outTimed, timing, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
+
+        float maxDiff = 0.0f;
+        float tolerance = 0.0f;
+        if (probe.fp16Accumulator) {
+            maxDiff = reference::MaxAbsDiffF16(reinterpret_cast<const uint16_t*>(outWarmup.data()),
+                                               expectedF16acc, 256);
+            tolerance = kTolF16acc;
+        } else {
+            maxDiff = reference::MaxAbsDiffF32(reinterpret_cast<const float*>(outWarmup.data()),
+                                               expectedF32acc, 256);
+            tolerance = kTolF32acc;
+        }
+        const bool correct = maxDiff <= tolerance;
+        const bool isaOk = probe.fp16Accumulator ? (wmmaF16 > 0 && wmmaF32 == 0)
+                                                 : (wmmaF32 > 0 && wmmaF16 == 0);
+        std::printf("%-22s | maxdiff %.6g (tol %.6g) %s | wmma_f32 x%zu wmma_f16 x%zu | %s\n",
+                    probe.label, maxDiff, tolerance, correct ? "OK  " : "FAIL",
+                    wmmaF32, wmmaF16, statsLine.c_str());
+        std::printf("%-22s | gpu time: min %.3f us, avg %.3f us | isa saved: %s\n",
+                    "", timing.minMs * 1000.0, timing.avgMs * 1000.0,
+                    saved ? isaFile.c_str() : "FAILED");
+
+        if (!correct || !isaOk || !saved) {
+            std::fprintf(stderr, "error: fp16 tile probe %s failed\n", probe.label);
+            ok = false;
+            break;
+        }
+    }
+
+    // --- Multi-tile comparison: 64 GEMMs of 16x16xK, K in {64, 256}; the same
+    // arithmetic on three paths (int8 WMMA / fp16 WMMA(f32acc) / int8 DP4A).
+    // K-scaling distinguishes compute-bound (time ~ K) from overhead-bound
+    // (flat) behavior (C07). ---
+    if (ok) {
+        constexpr uint32_t kGemms = 64;
+        constexpr uint32_t kTileCounts[2] = {4, 16}; // K = 64, K = 256
+        struct GemmKernel {
+            const char* csoK64;
+            const char* csoK256;
+            const char* label;
+            bool fp16;
+            uint32_t threadsPerGemm;
+        };
+        const GemmKernel gemmKernels[] = {
+            {"gemm_int8_wmma_k64", "gemm_int8_wmma_k256", "int8 wmma", false, 32},
+            {"gemm_fp16_wmma_k64", "gemm_fp16_wmma_k256", "fp16 wmma", true, 32},
+            {"gemm_int8_dp4a_k64", "gemm_int8_dp4a_k256", "int8 dp4a", false, 256},
+        };
+
+        struct GemmResult {
+            double minUs[2];
+            double avgUs[2];
+            double minMs[2];
+            double avgMs[2];
+            size_t vgpr = 0;
+            size_t lds = 0;
+        };
+        GemmResult results[3] = {};
+
+        for (uint32_t ki = 0; ki < 2; ++ki) {
+            const uint32_t kTiles = kTileCounts[ki];
+            // Build one input blob per kernel type (int8 layout shared by
+            // WMMA + DP4A; fp16 layout separate).
+            std::vector<uint8_t> in8(kGemms * (2u * 16u * 16u * kTiles + 1024u));
+            std::vector<uint8_t> inF16(kGemms * (2u * 32u * 16u * kTiles + 1024u));
+            std::vector<int32_t> ref8(kGemms * 256);
+            std::vector<float> refF16(kGemms * 256);
+            for (uint32_t g = 0; g < kGemms; ++g) {
+                uint8_t* base8 = in8.data() + g * (2u * 16u * 16u * kTiles + 1024u);
+                uint8_t* baseF = inF16.data() + g * (2u * 32u * 16u * kTiles + 1024u);
+                int32_t* c8 = reinterpret_cast<int32_t*>(base8 + 2u * 16u * 16u * kTiles);
+                float* cF = reinterpret_cast<float*>(baseF + 2u * 32u * 16u * kTiles);
+
+                int32_t acc8[256];
+                float accF[256];
+                for (uint32_t e = 0; e < 256; ++e) {
+                    acc8[e] = int32_t((g * 256u + e) % 7u) - 3;
+                    accF[e] = float((g * 256u + e) % 5u) - 2.0f;
+                    c8[e] = acc8[e];
+                    cF[e] = accF[e];
+                }
+                for (uint32_t t = 0; t < kTiles; ++t) {
+                    uint8_t* a8 = base8 + t * 512u;
+                    uint8_t* b8 = a8 + 256u;
+                    uint16_t* aF = reinterpret_cast<uint16_t*>(baseF + t * 1024u);
+                    uint16_t* bF = reinterpret_cast<uint16_t*>(baseF + t * 1024u + 512u);
+                    for (uint32_t e = 0; e < 256; ++e) {
+                        a8[e] = uint8_t(((g * 256u + e + t) * 37u + 11u) & 0xFFu);
+                        b8[e] = uint8_t(((g * 256u + e + t) * 53u + 29u) & 0xFFu);
+                        aF[e] = reference::F32ToF16(float(e % 17) * 0.125f - 1.0f);
+                        bF[e] = reference::F32ToF16(float((e * 7u) % 13u) * 0.125f - 0.75f);
+                    }
+                    int32_t tile8[256];
+                    reference::CpuInt8Matmul16x16x16(a8, b8, acc8, tile8, 0);
+                    memcpy(acc8, tile8, sizeof(acc8));
+                    reference::CpuF16Matmul16x16x16(aF, bF, accF, accF, 32);
+                }
+                memcpy(ref8.data() + g * 256, acc8, sizeof(acc8));
+                memcpy(refF16.data() + g * 256, accF, sizeof(accF));
+            }
+
+            for (uint32_t m = 0; m < 3; ++m) {
+                const GemmKernel& kernel = gemmKernels[m];
+                const char* csoName = ki == 0 ? kernel.csoK64 : kernel.csoK256;
+                const uint8_t* input = kernel.fp16 ? inF16.data() : in8.data();
+                const size_t inputBytes = kernel.fp16 ? inF16.size() : in8.size();
+                // Per-kernel verdicts: a failing kernel is reported but does not
+                // abort the loop — full comparison data per run.
+                bool kernelOk = true;
+
+                std::vector<uint8_t> cso;
+                if (!gpu::LoadShaderBytecode(csoName, cso, error)) {
+                    std::fprintf(stderr, "error: %s\n", error.c_str());
+                    ok = false;
+                    break;
+                }
+                D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+                psoDesc.pRootSignature = rootSignature.Get();
+                psoDesc.CS = {cso.data(), cso.size()};
+                gpu::ComPtr<ID3D12PipelineState> pso;
+                AmdExtD3DPipelineHandle handle = nullptr;
+                AmdExtD3DComputeShaderStats stats{};
+                if (!gpu::CreateAnalyzedComputePipeline(ext, psoDesc, pso, handle, stats, error)) {
+                    std::fprintf(stderr, "error: %s\n", error.c_str());
+                    ok = false;
+                    break;
+                }
+                if (ki == 0) {
+                    results[m].vgpr = stats.usageStats.numUsedVgprs;
+                    results[m].lds = stats.usageStats.ldsUsageSizeInBytes;
+                }
+                // ISA evidence per (kernel, K) configuration.
+                {
+                    std::string isa;
+                    std::string statsLine;
+                    if (gpu::GetPipelineIsa(ext, handle, isa, statsLine, error))
+                        SaveReport(reportsDir, std::string(csoName) + ".isa", isa);
+                    else {
+                        std::fprintf(stderr, "warning: ISA unavailable for %s: %s\n",
+                                     csoName, error.c_str());
+                        ok = false;
+                    }
+                }
+
+                gpu::MatmulRunResult timing;
+                std::vector<int32_t> outWarmup;
+                std::vector<int32_t> outTimed;
+                if (!gpu::RunGemmTile(ctx, rootSignature, pso, inputBytes, kGemms * 1024u,
+                                      kGemms, 10, 100, input,
+                                      outWarmup, outTimed, timing, error)) {
+                    std::fprintf(stderr, "error: %s\n", error.c_str());
+                    ok = false;
+                    break;
+                }
+
+                // Correctness: int8 paths bit-exact; fp16 within tolerance (256
+                // sequential adds at magnitude <= 258: order-swap bound ~8e-3).
+                if (kernel.fp16) {
+                    const float maxDiff = reference::MaxAbsDiffF32(
+                        reinterpret_cast<const float*>(outWarmup.data()), refF16.data(),
+                        size_t(kGemms) * 256);
+                    // NaN maxDiff must fail: use the not-less form.
+                    if (!(maxDiff <= 0.05f)) {
+                        std::fprintf(stderr, "error: fp16 gemm correctness maxdiff %.6g (tol 0.05)\n",
+                                     maxDiff);
+                        kernelOk = false;
+                    }
+                } else {
+                    const size_t mismatches = reference::CountI32Mismatches(
+                        outWarmup.data(), ref8.data(), size_t(kGemms) * 256);
+                    if (mismatches != 0) {
+                        std::fprintf(stderr, "error: int8 gemm (%s) correctness %zu mismatches\n",
+                                     csoName, mismatches);
+                        for (uint32_t d = 0; d < 6 && d < size_t(kGemms) * 256; ++d)
+                            std::fprintf(stderr, "  [%u] gpu %d vs ref %d\n", d,
+                                         outWarmup[d], ref8[d]);
+                        kernelOk = false;
+                    }
+                }
+                if (!kernelOk)
+                    ok = false;
+                results[m].minUs[ki] = timing.minMs * 1000.0;
+                results[m].avgUs[ki] = timing.avgMs * 1000.0;
+                results[m].minMs[ki] = timing.minMs;
+                results[m].avgMs[ki] = timing.avgMs;
+            }
+        }
+
+        if (ok) {
+            std::printf("\nmulti-tile comparison: %u gemms of 16x16xK, 10 warmup + 100 timed dispatches\n",
+                        kGemms);
+            std::printf("%-12s %8s %10s %10s %10s %10s %6s\n",
+                        "kernel", "vgpr", "min@K64", "avg@K64", "min@K256", "avg@K256", "scale");
+            for (uint32_t m = 0; m < 3; ++m) {
+                const double scale = results[m].minUs[0] > 0.0
+                                         ? results[m].minUs[1] / results[m].minUs[0]
+                                         : 0.0;
+                std::printf("%-12s %8zu %9.2fus %9.2fus %9.2fus %9.2fus %5.2fx\n",
+                            gemmKernels[m].label, results[m].vgpr,
+                            results[m].minUs[0], results[m].avgUs[0],
+                            results[m].minUs[1], results[m].avgUs[1], scale);
+            }
+            std::printf("theoretical: 16x16x16 tile = 4096 MACs per wmma wave-instruction; "
+                        "dp4a = 4 MACs per lane-instruction (per-lane outputs, 16 dots/tile-row)\n");
+        }
+    }
+
+    if (ok) {
+        std::string queueErrors;
+        size_t benignCount = 0;
+        const auto benignIntrinsicsDummy =
+            [](const D3D12_MESSAGE& msg) {
+                if (!msg.pDescription)
+                    return false;
+                const char* desc = msg.pDescription;
+                return strstr(desc, "GPU-BASED VALIDATION") != nullptr &&
+                       strstr(desc, "Root descriptor access out of bounds") != nullptr &&
+                       strstr(desc, "Root Parameter Index: [2]") != nullptr;
+            };
+        if (!gpu::InfoQueueCleanWithFilter(ctx, benignIntrinsicsDummy, benignCount, queueErrors)) {
+            std::fprintf(stderr, "%s", queueErrors.c_str());
+            ok = false;
+        } else {
+            std::printf("diagnostics: no unexplained error-severity messages (%zu known-benign "
+                        "GBAV intrinsics-dummy reports classified, see EXP-004)\n",
+                        benignCount);
+        }
+    }
+
+    gpu::ReleaseAmdExtensions(ext);
+    std::printf("%s\n", ok ? "fp16 wmma + comparison: PASS" : "fp16 wmma + comparison: FAIL");
+    return ok ? 0 : 1;
+}
+
 int RunComputeHarness() {
     // Deterministic input covering negative, positive and fractional values.
     const size_t count = 1u << 20;

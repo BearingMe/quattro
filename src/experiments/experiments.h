@@ -13,4 +13,8 @@ int RunComputeHarness();
 // control. Returns the CLI exit code (0 pass, 1 experiment failure).
 int RunWmmaInt8();
 
+// M07 — FP16 WMMA (F32 + F16 accumulators) and the INT8/FP16/DP4A multi-tile
+// hardware comparison. Returns the CLI exit code.
+int RunWmmaFp16();
+
 } // namespace experiments

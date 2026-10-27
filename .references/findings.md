@@ -42,10 +42,10 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 
 ## F6 — Quantization policy matters more than instruction choice (harness evidence)
 
-- **Observation:** Per-iteration requantization regressed INT8 +194% / FP8 +476%; scalar INT8 I/O beat packed dot by ~32%; loop unrolling +12% (gfx1151 microkernels).
-- **Evidence:** [M] lhl/fsr4-rdna3-optimization @ `49015b7`, measured in their HIP harness (cv < 1% protocol).
-- **Confidence:** Medium-high for their harness on gfx1151; **unproven on gfx1101 and in real DXC-compiled FSR-style HLSL**.
-- **Implication:** Design rule candidate for our pipeline: accumulate in INT32/FP32, quantize once at store. Re-validate scalar-vs-packed on gfx1101 (M07) before adopting.
+- **Observation:** Per-iteration requantization regressed INT8 +194% / FP8 +476%; scalar INT8 I/O beat packed dot by ~32%; loop unrolling +12% (gfx1151 microkernels). On gfx1101 (M07, EXP-005): driver-generated WMMA chains are **overhead-bound** (2.4–3.1× time for 4× K) while DP4A is compute-bound-ish (4.9–5.2×) — DP4A wins **4.2–4.7× at 16×16×64** but only **2.2–2.7× at 16×16×256** (the WMMA prologue amortizes with K); the per-tile fragment-gather (buffer loads + `ds_bpermute`) dominates the WMMA path unless operands are LDS-staged (FSR4's own `pre_wmma.hlsl` pattern).
+- **Evidence:** [M] lhl/fsr4-rdna3-optimization @ `49015b7` (gfx1151, cv < 1% protocol); [M] EXP-005 on gfx1101 (100 timed dispatches × 2 configs × 2 K values, ISA-verified kernels).
+- **Confidence:** High for gfx1101 at these shapes; the gfx1151 scalar-vs-packed claim remains unproven here.
+- **Implication:** Design rule for our pipeline: accumulate INT32/FP32, quantize once at store; stage WMMA operands through LDS and reuse tiles before WMMA beats DP4A (the crossover is shape-dependent — measure, don't assume). Re-validate scalar-vs-packed on gfx1101 in M09/M15. FP16-vs-INT8 WMMA: no meaningful timing difference at these shapes (register cost differs: 83 vs 52 VGPRs in the GEMM kernels).
 
 ## F7 — Sanctioned HLSL WMMA path is arriving (SM 6.9 CoopVec → DX Linear Algebra)
 

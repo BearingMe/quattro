@@ -77,13 +77,59 @@ add_custom_command(
     DEPENDS ${SHADER_SRC}/int8_dp4a.hlsl
     COMMENT "dxc: int8_dp4a.hlsl -> shaders/int8_dp4a.cso")
 
+# M07: FP16 WMMA tile probes and the multi-tile GEMM comparison kernels.
+# The GEMM kernels are fixed graphs (FSR4/ML2Code codegen style): K and the
+# GEMM count are compile-time -D defines, one CSO per (kernel, K) pair.
+foreach(_mode f32acc f16acc)
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/fp16_wmma_${_mode}.cso
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -enable-16bit-types -E main_${_mode} -I "${SHADER_INC}"
+                -Fo ${FSR4_SHADER_DIR}/fp16_wmma_${_mode}.cso
+                ${SHADER_SRC}/fp16_wmma.hlsl
+        DEPENDS ${SHADER_SRC}/fp16_wmma.hlsl
+        COMMENT "dxc: fp16_wmma.hlsl(${_mode}) -> shaders/fp16_wmma_${_mode}.cso")
+endforeach()
+foreach(_k64_256 4 16)
+    if(_k64_256 STREQUAL "4")
+        foreach(_entry gemm_int8_wmma gemm_fp16_wmma gemm_int8_dp4a)
+            add_custom_command(
+                OUTPUT ${FSR4_SHADER_DIR}/${_entry}_k64.cso
+                COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -enable-16bit-types -E ${_entry}
+                        -D GEMM_K_TILES=4 -I "${SHADER_INC}"
+                        -Fo ${FSR4_SHADER_DIR}/${_entry}_k64.cso
+                        ${SHADER_SRC}/gemm_compare.hlsl
+                DEPENDS ${SHADER_SRC}/gemm_compare.hlsl
+                COMMENT "dxc: gemm_compare.hlsl(${_entry}, K=64) -> shaders/${_entry}_k64.cso")
+        endforeach()
+    else()
+        foreach(_entry gemm_int8_wmma gemm_fp16_wmma gemm_int8_dp4a)
+            add_custom_command(
+                OUTPUT ${FSR4_SHADER_DIR}/${_entry}_k256.cso
+                COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -enable-16bit-types -E ${_entry}
+                        -D GEMM_K_TILES=16 -I "${SHADER_INC}"
+                        -Fo ${FSR4_SHADER_DIR}/${_entry}_k256.cso
+                        ${SHADER_SRC}/gemm_compare.hlsl
+                DEPENDS ${SHADER_SRC}/gemm_compare.hlsl
+                COMMENT "dxc: gemm_compare.hlsl(${_entry}, K=256) -> shaders/${_entry}_k256.cso")
+        endforeach()
+    endif()
+endforeach()
+
 add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/vector_add.cso
     ${FSR4_SHADER_DIR}/int8_wmma_i8.cso
     ${FSR4_SHADER_DIR}/int8_wmma_u8.cso
     ${FSR4_SHADER_DIR}/int8_wmma_iu8.cso
     ${FSR4_SHADER_DIR}/int8_wmma_ui8.cso
-    ${FSR4_SHADER_DIR}/int8_dp4a.cso)
+    ${FSR4_SHADER_DIR}/int8_dp4a.cso
+    ${FSR4_SHADER_DIR}/fp16_wmma_f32acc.cso
+    ${FSR4_SHADER_DIR}/fp16_wmma_f16acc.cso
+    ${FSR4_SHADER_DIR}/gemm_int8_wmma_k64.cso
+    ${FSR4_SHADER_DIR}/gemm_fp16_wmma_k64.cso
+    ${FSR4_SHADER_DIR}/gemm_int8_dp4a_k64.cso
+    ${FSR4_SHADER_DIR}/gemm_int8_wmma_k256.cso
+    ${FSR4_SHADER_DIR}/gemm_fp16_wmma_k256.cso
+    ${FSR4_SHADER_DIR}/gemm_int8_dp4a_k256.cso)
 add_dependencies(rdna3-int8 compile_shaders)
 
 enable_testing()
@@ -100,3 +146,6 @@ add_test(NAME experiment_d3d12_compute COMMAND rdna3-int8 run d3d12-compute)
 
 # M06 hardware test: INT8 WMMA probes must pass on this machine.
 add_test(NAME experiment_wmma_int8 COMMAND rdna3-int8 run wmma-int8)
+
+# M07 hardware test: FP16 WMMA + comparison must pass on this machine.
+add_test(NAME experiment_wmma_fp16 COMMAND rdna3-int8 run wmma-fp16)

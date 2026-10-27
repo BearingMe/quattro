@@ -77,7 +77,10 @@ bool CreateAnalyzedComputePipeline(AmdExtensions& ext, const D3D12_COMPUTE_PIPEL
     const HRESULT hr = ext.analyzer->CreateComputePipelineState(
         &desc, IID_PPV_ARGS(&pso), &stats, &handle);
     if (FAILED(hr)) {
-        error = "IAmdExtD3DShaderAnalyzer::CreateComputePipelineState failed";
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "IAmdExtD3DShaderAnalyzer::CreateComputePipelineState failed, HRESULT=0x%08lX",
+                      (unsigned long)hr);
+        error = buf;
         return false;
     }
     return true;

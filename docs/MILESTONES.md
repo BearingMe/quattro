@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M06 complete (see per-milestone status) |
+| Status | Roadmap — M01–M07 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -447,7 +447,7 @@ If D3D12/HLSL cannot reliably emit native INT8 WMMA, determine the smallest viab
 
 ### M07 — FP16 WMMA and Hardware Comparison
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-005-fp16-wmma-comparison.md`](experiments/EXP-005-fp16-wmma-comparison.md))
 
 #### Objective
 
@@ -467,23 +467,23 @@ Implement equivalent FP16 matrix operations. Investigate:
 
 #### Checkpoints
 
-- [ ] C01: Implement native FP16 WMMA.
-- [ ] C02: Validate FP16 numerical results.
-- [ ] C03: Confirm generated WMMA instructions.
-- [ ] C04: Measure comparable FP16 and INT8 workloads.
-- [ ] C05: Compare operand and accumulator requirements.
-- [ ] C06: Investigate occupancy and register usage.
-- [ ] C07: Distinguish arithmetic from memory bottlenecks.
+- [x] C01: Implement native FP16 WMMA.
+- [x] C02: Validate FP16 numerical results.
+- [x] C03: Confirm generated WMMA instructions.
+- [x] C04: Measure comparable FP16 and INT8 workloads.
+- [x] C05: Compare operand and accumulator requirements.
+- [x] C06: Investigate occupancy and register usage.
+- [x] C07: Distinguish arithmetic from memory bottlenecks.
 
 #### Validation Gate
 
-- [ ] FP16 implementation produces valid results.
-- [ ] Native FP16 WMMA instructions are confirmed.
-- [ ] Both precisions use comparable matrix workloads.
-- [ ] Relevant accumulator differences are documented.
-- [ ] Timing measurements are repeated.
-- [ ] Warm-up and measurement methodology are documented.
-- [ ] Results distinguish theoretical and observed throughput.
+- [x] FP16 implementation produces valid results.
+- [x] Native FP16 WMMA instructions are confirmed.
+- [x] Both precisions use comparable matrix workloads.
+- [x] Relevant accumulator differences are documented.
+- [x] Timing measurements are repeated.
+- [x] Warm-up and measurement methodology are documented.
+- [x] Results distinguish theoretical and observed throughput.
 
 #### Deliverables
 
