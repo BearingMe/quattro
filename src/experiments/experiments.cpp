@@ -6,6 +6,7 @@
 #include "../gpu/matmul.h"
 #include "../reference/reference.h"
 #include "core/numerics.h"
+#include "core/tensor.h"
 
 #include <cstdio>
 #include <cstring>
@@ -1328,6 +1329,11 @@ int RunInt8Kernels() {
     for (const GemmShape& shape : shapes) {
         if (!ok)
             break;
+        if (!core::ValidateInt8Accumulation(shape.k, 0, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            ok = false;
+            break;
+        }
         // Packed operands: bounded range keeps the int32 accumulator safe.
         std::vector<int8_t> a(size_t(shape.mp) * shape.k);
         std::vector<int8_t> b(size_t(shape.k) * shape.np);
@@ -1402,6 +1408,11 @@ int RunInt8Kernels() {
     // --- Part 2 (C05/C06): requant at store vs the AMD FNB_CT2D contract. ---
     {
         const uint32_t m = 20, n = 24, k = 64;
+        if (!core::ValidateInt8Accumulation(k, 0, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            gpu::ReleaseAmdExtensions(ext);
+            return 1;
+        }
         const uint32_t mp = 32, np = 32;
         const float sIn = 0.014884727f;
         const float sW = 0.02f;
@@ -1466,21 +1477,15 @@ int RunInt8Kernels() {
         }
     }
 
-    // --- Part 3 (overflow guard): the pack-time bound vs INT32 accumulation.
-    // Fact: int8 x int8 products accumulate in INT32 without overflow for any
-    // K <= ~133k even at the full [-128, 127] operand range (127*127*K <
-    // 2^31); the guard exists for pathological K / large accumulated inits.
-    // Demonstrate both sides of the policy on synthetic bounds. ---
+    // --- Part 3: exercise the same rejecting policy used before raw dispatch.
+    // Full signed INT8 includes -128*-128=16384, not only 127*127. ---
     {
-        const int64_t boundK256 = int64_t(256) * 127 * 127;      // 4.13e6
-        const int64_t boundK200k = int64_t(200000) * 127 * 127;  // 3.23e9 > 2^31
-        const bool pass256 = boundK256 < (1LL << 31);
-        const bool refuse200k = boundK200k >= (1LL << 31);
-        std::printf("overflow guard: K=256 worst-case bound %lld -> allowed; "
-                    "K=200000 bound %lld -> %s\n",
-                    (long long)boundK256, (long long)boundK200k,
-                    refuse200k ? "REFUSED (prevented)" : "NOT REFUSED");
-        if (!pass256 || !refuse200k)
+        std::string guardError;
+        const bool safe = core::ValidateInt8Accumulation(131071, 0, guardError);
+        const bool refused = !core::ValidateInt8Accumulation(131072, 0, guardError);
+        std::printf("overflow guard: K=131071 -> %s; K=131072 -> %s\n",
+                    safe ? "allowed" : "FAILED", refused ? "REFUSED" : "FAILED");
+        if (!safe || !refused)
             ok = false;
     }
 
@@ -1503,6 +1508,11 @@ int RunInt8Kernels() {
             const uint32_t mp = (mm + 15) & ~15u;
             const uint32_t np = (co + 15) & ~15u;
             const uint32_t k = 9 * cin;
+            if (!core::ValidateInt8Accumulation(k, 0, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+                break;
+            }
 
             // Deterministic int8 input/weights with negatives + bias. Two
             // input copies: unpadded (the CPU reference's layout, it does its
@@ -1630,6 +1640,10 @@ int RunInt8Kernels() {
     if (ok) {
         const auto benchGemm = [&](ID3D12PipelineState* pso, uint32_t mp, uint32_t np,
                                    uint32_t k, double& minUs) -> bool {
+            if (!core::ValidateInt8Accumulation(k, 0, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                return false;
+            }
             std::vector<int8_t> a(size_t(mp) * k);
             std::vector<int8_t> b(size_t(k) * np);
             for (uint32_t i = 0; i < a.size(); ++i)

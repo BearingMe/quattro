@@ -30,6 +30,7 @@ const std::vector<Experiment>& experiments() {
         {"wmma-fp16", "M07 FP16 WMMA + INT8/FP16/DP4A comparison", &experiments::RunWmmaFp16},
         {"quantization", "M08 FP8/INT8 quantization contract (incl. AMD QuantizeLinear on hw)", &experiments::RunQuantization},
         {"kernels-int8", "M09 INT8 GEMM/requant/conv kernels on native WMMA", &experiments::RunInt8Kernels},
+        {"tensor-ops", "M10 neural tensor operations and precision boundaries", &experiments::RunTensorOps},
     };
     return kExperiments;
 }

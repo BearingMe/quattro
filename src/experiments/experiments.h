@@ -29,4 +29,7 @@ int RunQuantization();
 // benchmarks. Returns the CLI exit code.
 int RunInt8Kernels();
 
+// M10 — source-justified non-matrix operations and explicit tensor contracts.
+int RunTensorOps();
+
 } // namespace experiments

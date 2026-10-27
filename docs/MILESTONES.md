@@ -622,7 +622,13 @@ Do not build a generic deep-learning library. Implement only operations justifie
 
 ### M10 — Neural Network Operations
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-008-neural-operators.md`](experiments/EXP-008-neural-operators.md))
+
+[M] Gate PASS on gfx1101: 60 hardware operator cases and 24 rejection/boundary
+checks; final rebuilt Debug and Release CTest 9/9. Scope is the non-matrix
+constituents of FSR 4.0.2 v07 INT8 Quality main passes, not a complete FSR model
+or GPU-resident network. Source inventory and tensor/precision contract:
+[`findings/2026-10-27-m10-operator-inventory.md`](findings/2026-10-27-m10-operator-inventory.md).
 
 #### Objective
 
@@ -646,21 +652,21 @@ Do not implement an operation merely because it is common in neural networks.
 
 #### Checkpoints
 
-- [ ] C01: Identify the exact required operator set.
-- [ ] C02: Implement the minimal operator set.
-- [ ] C03: Validate tensor shapes and layouts.
-- [ ] C04: Validate each operation against a CPU reference.
-- [ ] C05: Test transitions between integer and floating-point values.
-- [ ] C06: Document intermediate precision requirements.
+- [x] C01: Identify the exact required operator set.
+- [x] C02: Implement the minimal operator set.
+- [x] C03: Validate tensor shapes and layouts.
+- [x] C04: Validate each operation against a CPU reference.
+- [x] C05: Test transitions between integer and floating-point values.
+- [x] C06: Document intermediate precision requirements.
 
 #### Validation Gate
 
-- [ ] Required operators are implemented.
-- [ ] Every operator passes independent correctness tests.
-- [ ] Tensor layouts are consistent.
-- [ ] Mixed-precision boundaries are explicit.
-- [ ] Intermediate results can be inspected.
-- [ ] No speculative operators or abstraction layers were added.
+- [x] Required operators are implemented.
+- [x] Every operator passes independent correctness tests.
+- [x] Tensor layouts are consistent.
+- [x] Mixed-precision boundaries are explicit.
+- [x] Intermediate results can be inspected.
+- [x] No speculative operators or abstraction layers were added.
 
 #### Deliverables
 

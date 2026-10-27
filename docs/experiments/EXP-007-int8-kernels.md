@@ -3,6 +3,26 @@
 Date: 2026-10-27
 Milestone: M09
 
+## M10 evidence correction (2026-10-27)
+
+- [S] This historical report's broad claims below are superseded where noted
+  by [EXP-008](EXP-008-neural-operators.md). The full signed INT8 product bound
+  is **16384**, including -128×-128, so zero-initialized full-range K must be
+  ≤131071, not ~133k. The former synthetic refusal was a boolean comparison,
+  not a reusable rejection path. M10 adds `ValidateInt8Accumulation`, exercises
+  its rejection branch, and enforces it at M09 raw/conv/benchmark call sites.
+- [M] Historical requant agreement applies only to the tested input values.
+  The saved contracted ISA does not prove equivalence to a separately rounded
+  reference at rounding boundaries. M10 tests a distinct `precise` operator
+  with an input that distinguishes fused from separately rounded arithmetic.
+- [U] The recorded cbuffer/Fill PSO failures are not isolated proofs of a
+  universal driver/compiler restriction. Per-shape specialization is the
+  retained working path, not a general capability conclusion.
+- [M] Historical timings used GPU validation and the stated warm cycle; they
+  are not clean-path throughput ceilings. M10 adds UAV ordering between
+  repeated dispatch writes (outside timestamp pairs). New regression timings
+  must not be conflated with the original benchmark values.
+
 ## Question
 
 Can the M06-validated native INT8 WMMA tile be generalized into reusable inference operations — arbitrary M/N via the dispatch grid, non-multiple-of-16 dimensions via padded packing, AMD's FNB_CT2D requantize-at-store contract, and a 3×3 stride-1 pad-1 convolution built on the same path — with boundary correctness, overflow prevention, native-instruction evidence, and reproducible benchmarks?

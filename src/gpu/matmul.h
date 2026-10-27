@@ -25,8 +25,9 @@ struct MatmulRunResult {
 //   u0 space0        UAV  — byte-addressed output tile
 //   u0 space 0x7FFF0ADE  UAV — AMD intrinsics dummy UAV (driver-intercepted)
 // Kernel shape/scale parameters are baked into the per-shape CSOs (-D
-// defines, ML2Code codegen style) — the driver's analyzer rejects
-// cbuffer-carrying WMMA shaders, so there are no root constants.
+// defines, ML2Code codegen style). M09 observed analyzer failures with its
+// cbuffer variants; this workaround is not proof of a general driver limit.
+// There are no root constants in this signature.
 bool CreateGemmTileRootSignature(DeviceContext& ctx,
                                  ComPtr<ID3D12RootSignature>& rootSignature,
                                  std::string& error);

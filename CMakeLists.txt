@@ -20,11 +20,15 @@ endforeach()
 add_executable(rdna3-int8
     src/main.cpp
     src/core/numerics.cpp
+    src/core/tensor.cpp
     src/gpu/device.cpp
     src/gpu/compute.cpp
     src/gpu/amdext.cpp
     src/gpu/matmul.cpp
+    src/gpu/tensor_ops.cpp
     src/reference/reference.cpp
+    src/reference/tensor_ops.cpp
+    src/experiments/tensor_ops.cpp
     src/experiments/experiments.cpp)
 
 target_link_libraries(rdna3-int8 PRIVATE d3d12.lib dxgi.lib)
@@ -183,7 +187,15 @@ foreach(_pair requant_m32n24:32:24:4096 requant_m64n16:16:16:4096 requant_m64n20
         COMMENT "dxc: gemm_i8.hlsl(${_suf}) -> shaders/gemm_${_suf}.cso")
 endforeach()
 
+add_custom_command(
+    OUTPUT ${FSR4_SHADER_DIR}/tensor_ops.cso
+    COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -HV 2021 -denorm preserve -E main
+            -Fo ${FSR4_SHADER_DIR}/tensor_ops.cso ${SHADER_SRC}/tensor_ops.hlsl
+    DEPENDS ${SHADER_SRC}/tensor_ops.hlsl
+    COMMENT "dxc: tensor_ops.hlsl -> shaders/tensor_ops.cso")
+
 add_custom_target(compile_shaders DEPENDS
+    ${FSR4_SHADER_DIR}/tensor_ops.cso
     ${FSR4_SHADER_DIR}/vector_add.cso
     ${FSR4_SHADER_DIR}/int8_wmma_i8.cso
     ${FSR4_SHADER_DIR}/int8_wmma_u8.cso
@@ -238,3 +250,4 @@ add_test(NAME experiment_quantization COMMAND rdna3-int8 run quantization)
 
 # M09 hardware test: INT8 GEMM/requant/conv kernels must pass on this machine.
 add_test(NAME experiment_kernels_int8 COMMAND rdna3-int8 run kernels-int8)
+add_test(NAME experiment_tensor_ops COMMAND rdna3-int8 run tensor-ops)

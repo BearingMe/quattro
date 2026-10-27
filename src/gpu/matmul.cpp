@@ -191,8 +191,13 @@ bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
     list->SetComputeRootShaderResourceView(1, bufIn->GetGPUVirtualAddress());
     list->SetComputeRootUnorderedAccessView(2, bufDummy->GetGPUVirtualAddress());
 
-    for (uint32_t i = 0; i < warmup; ++i)
+    D3D12_RESOURCE_BARRIER uavOrder{};
+    uavOrder.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavOrder.UAV.pResource = bufOut.Get();
+    for (uint32_t i = 0; i < warmup; ++i) {
         list->Dispatch(gridX, gridY, 1);
+        list->ResourceBarrier(1, &uavOrder);
+    }
 
     // Correctness snapshot: exactly the state after `warmup` dispatches.
     D3D12_RESOURCE_BARRIER outToCopy1 = TransitionBarrier(bufOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -210,6 +215,7 @@ bool RunGemmTile(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignature,
         list->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i * 2);
         list->Dispatch(gridX, gridY, 1);
         list->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i * 2 + 1);
+        list->ResourceBarrier(1, &uavOrder);
     }
 
     D3D12_RESOURCE_BARRIER outToCopy2 = TransitionBarrier(bufOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
