@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M02 complete (see per-milestone status) |
+| Status | Roadmap — M01–M03 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -224,7 +224,7 @@ Do not begin implementation.
 
 ### M03 — Official FSR 4 Baseline
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-002-fsr4-baseline.md`](experiments/EXP-002-fsr4-baseline.md))
 
 #### Objective
 
@@ -242,24 +242,24 @@ Do not assume older FSR 4.0.x artifacts represent the current implementation.
 
 #### Checkpoints
 
-- [ ] C01: Identify the exact FSR SDK and runtime versions.
-- [ ] C02: Build or run an official supported sample.
-- [ ] C03: Verify that the ML upscaling path is selected.
-- [ ] C04: Execute Super Resolution on gfx1101.
-- [ ] C05: Capture output frames.
-- [ ] C06: Measure upscaling GPU time.
-- [ ] C07: Record resolution and quality settings.
-- [ ] C08: Save a reproducible test configuration.
+- [x] C01: Identify the exact FSR SDK and runtime versions.
+- [x] C02: Build or run an official supported sample.
+- [x] C03: Verify that the ML upscaling path is selected.
+- [x] C04: Execute Super Resolution on gfx1101.
+- [x] C05: Capture output frames.
+- [x] C06: Measure upscaling GPU time.
+- [x] C07: Record resolution and quality settings.
+- [x] C08: Save a reproducible test configuration.
 
 #### Validation Gate
 
-- [ ] Official implementation executes on the RX 7700 XT.
-- [ ] The ML-based path is confirmed rather than an analytical fallback.
-- [ ] A reconstructed frame is produced.
-- [ ] Output and input resolutions are recorded.
-- [ ] GPU timing is measured.
-- [ ] Runtime, driver, and SDK versions are recorded.
-- [ ] Experiment can be reproduced.
+- [x] Official implementation executes on the RX 7700 XT.
+- [x] The ML-based path is confirmed rather than an analytical fallback.
+- [x] A reconstructed frame is produced.
+- [x] Output and input resolutions are recorded.
+- [x] GPU timing is measured.
+- [x] Runtime, driver, and SDK versions are recorded.
+- [x] Experiment can be reproduced.
 
 #### Deliverables
 

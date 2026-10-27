@@ -31,6 +31,7 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 - **Evidence:** [S] local inspection.
 - **Confidence:** High.
 - **Implication:** The MIT 4.0.2 mirror is the only source-level FSR 4 reference; FSR 4.1 RDNA 3 details require the companion RE project or black-box observation (M04). Keep SDK submodule for D3D12/FSR2/3 conventions only.
+- **Update (2026-10-27, EXP-002):** The same SDK ships the closed FSR 4 runtime as *signed binaries* in `Kits/FidelityFX/signedbin/` (`amd_fidelityfx_upscaler_dx12.dll` 4.1.1.2740, loader 2.3.0.2740) â€” a legitimate 4.1 artifact was obtainable after all, and the official prebuilt sample ran it on gfx1101 (see F8). The 4.0.2 mirror remains source-only reference.
 
 ## F5 â€” gfx1101 is the correct AMD ISA target for this card
 
@@ -52,3 +53,10 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 - **Evidence:** [D] devblogs.microsoft.com (SM 6.9 retail 2026-02; LinAlg 2026-03), gpuopen.com GDC 2026 post.
 - **Confidence:** High that the path exists; [U] whether our driver/gfx1101 exposes it (SDK dxc 1.8.2502 also too old to compile SM 6.9).
 - **Implication:** M06 requires: newer standalone DXC + Agility SDK + `CheckFeatureSupport` probe; keep DP4A path as the portable fallback.
+
+## F8 — The official FSR 4.1 runtime runs unmodified on gfx1101: ~1.36 ms at Quality 720p?1080p (M03 oracle)
+
+- **Observation:** FSR SDK 2.3.0's signed `amd_fidelityfx_upscaler_dx12.dll` (4.1.1.2740) enumerates upscaler versions **4.1.2\* (default), 4.1.1, 3.1.5, 2.3.4** and executes its default **FSR 4.1.2 ML upscaler** on the RX 7700 XT via the official prebuilt `FidelityFX_FSR` sample: 1280×707 ? 1920×1061, Quality preset (qualityMode 1), **avg 1.3645 / 1.3528 ms** across two 600-frame runs (? ˜ 0.9%). Captured frames valid (sharp Sponza, readable inscriptions).
+- **Evidence:** [M] EXP-002 (`docs/experiments/EXP-002-fsr4-baseline.md`), outputs archived in `build/captures/m03/`; version enumeration in `Cauldron.log`; `GPU`/`DriverVersion` recorded in benchmark JSONs.
+- **Confidence:** High (two independent runs, in-band device identification, official binaries unmodified).
+- **Implication:** (1) M03 oracle established — no 4.0.x substitute needed for the baseline; (2) whole-frame `GPUTime` label in Cauldron benchmark JSONs is broken (4e-05 ms) — use per-label timings; (3) sample exits 0xC0000005 at teardown after writing outputs (quirk, not a measurement issue); (4) 4.1.1 is UI-selectable for exact-version A/B in later milestones.
