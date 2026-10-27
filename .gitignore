@@ -1,12 +1,35 @@
-# Build output
+# Build output — all generated artifacts must live here
+build/
 bin/
 obj/
-build/
 out/
 
-# IDE
+# CMake user-local configuration
+CMakeUserPresets.json
+
+# Compiled artifacts that must never escape build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# GPU captures and profiling output
+*.rgp
+*.v-cap
+
+# IDE / editor
 .vs/
+.vscode/
+.idea/
 *.user
 
-# Local tooling artifacts
+# Temporary files and logs
 *.log
+*.tmp
+
+# Python (offline analysis scripts only)
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
