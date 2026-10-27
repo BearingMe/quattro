@@ -11,6 +11,7 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 - [S] Weight payloads are tiny: `initializers.bin` = **87.1 KB (INT8)** / **127.0 KB (FP8)** per variant tier (directory listing of all 12 files).
 - [S] The INT8 path accumulates via the standard HLSL intrinsic `dot4add_i8packed` into (per-lane) accumulators, gated by `#define DOT4_ENABLED 1` in the generated passes.
   Source: pinned `c5e34b4`, `Kits/FidelityFX/upscalers/fsr4/include/gpu/fsr4/post_common.hlsli` L76–218; `internal/shaders/fsr4_model_v07_fp8_no_scale_passes_1080.hlsl` L10.
+- [M] **M08 hardware validation (EXP-006)**: the shipped `QuantizeLinear` operator on gfx1101 matches an independent CPU contract bit-exactly at 4 scales (incl. the real 0.0148847 v07 scale): `q = pack_clamp_s8(int4(round(v * (1/scale))))` — round = ties-to-even (halfway cases confirmed on hw), clamp [-128, 127] (not ±127), zero point structurally 0, per-tensor scale = dequantize multiplier baked in tensor metadata. Special values: NaN→0, ±inf→±clamp, −0→0 — reproducible, position-independent. FP8 in v07 = activation storage via WMMA `CopySat` (scale 1.0); no FP8→INT8 conversion exists in shipped code.
 - [M] On gfx1151 (independent microkernels): per-iteration requantization is catastrophic (INT8 +194%, FP8 +476% vs quantize-once-at-store); forced per-iteration requant explains most of an apparent FP8 deficit.
   Source: lhl/fsr4-rdna3-optimization @ `49015b7`, README "Evidence Boundaries" (measured in their harness).
 - [D-press] Shipping FSR 4.1 executes FP8 on RDNA 4 and INT8 on RDNA 3 (same or near-identical model).
@@ -23,16 +24,17 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 
 ## Unknowns
 
-- [U] Binary layout of `initializers.bin` (tensor offsets, dtypes, scale placement).
-- [U] Saturation/overflow behavior of the accumulation path in generated code (does any pass use saturating dot4 variants?).
-- [U] Activation quantization points (which tensors are stored INT8 vs F16/F32 between passes).
+- [x] ~~Binary layout of `initializers.bin`~~ — not needed for M08: the quantization contract was established from the operator source + tensor structs; weight-payload decode is M12's prerequisite.
+- [x] ~~Saturation/overflow behavior of the accumulation path~~ — quantize-side saturation characterized (EXP-006): `pack_clamp_s8` clamps [-128, 127]; NaN→0, ±inf→±clamp, position-independent, reproducible on gfx1101. Accumulator-side overflow (INT32 wrap) remains M09's requantization concern.
+- [x] ~~Activation quantization points~~ — [S] activations are quantized at store per fused pass (`round(result * rcpScale)` in Fused operators); fp16 between passes; FP8 variant stores activations as FP8 via WMMA `CopySat` (EXP-006).
+- [x] ~~Per-tensor vs per-channel scale layout~~ — [S] v07 operators are per-tensor symmetric, zero point 0 (scale baked in tensor metadata; scale/zero-point operator params ignored); per-channel does not appear in the v07 operator set.
 
 ## Questions requiring experiments
 
-1. Decode `fsr4_model_v07_i8_balanced/initializers.bin` and the tensor schema; map every tensor to its consumer pass (host-side, no GPU).
-2. Compare i8 vs fp8 weight payloads numerically (same tier) → evidence about FP8→INT8 relationship.
-3. Propagate one random input through the INT8 pass graph on CPU using decoded weights; measure quantization error vs FP32 reference (informs error budget).
+1. ~~Decode `fsr4_model_v07_i8_balanced/initializers.bin`...~~ — deferred to M12 (weight loading); the operator-level contract (M08) did not require it.
+2. ~~Compare i8 vs fp8 weight payloads numerically~~ — superseded by source evidence: the two networks are separately generated with different operator sets; no FP8→INT8 conversion exists in shipped code (EXP-006). Numerical weight comparison remains optional for M12.
+3. ~~Propagate one random input through the INT8 pass graph on CPU~~ — M12 territory (needs the full graph); the per-operator error contract is now established (EXP-006).
 
 ## Sources
 
-See inline; archive pinned at `c5e34b4` (see [README](../README.md)).
+See inline; archive pinned at `c5e34b4` (see [README](../README.md)). Hardware validation: `docs/experiments/EXP-006-quantization.md`.

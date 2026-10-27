@@ -38,7 +38,7 @@ Conceptual boundaries — **not** separate CMake libraries. Create `src/<module>
 | **inference** | Network representation, layer execution, operator sequencing, weights, intermediate tensors, FSR 4 model execution | core, gpu | appear below gpu/core in the stack |
 | **experiments** | Orchestration of independently runnable experiments and benchmarks | all modules | be depended on by any production module |
 
-Model-specific behavior stays in `inference` (model code under `src/inference/models/` when it exists); general numerical primitives stay in `core`/`gpu`.
+Model-specific behavior stays in `inference` (model code under `src/inference/models/` when it exists); general numerical primitives stay in `core`/`gpu`. Vendored AMD operator/runtime HLSL under `src/gpu/amd/ml2code_runtime/` (see its `PROVENANCE.md`) is generic operator-level infrastructure, not FSR 4 model semantics — the same line already drawn for the vendored `AmdExtD3D` headers.
 
 ## 4. Dependency direction
 

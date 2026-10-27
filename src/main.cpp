@@ -28,6 +28,7 @@ const std::vector<Experiment>& experiments() {
         {"d3d12-compute", "M05 D3D12 compute harness validation", &experiments::RunComputeHarness},
         {"wmma-int8", "M06 native INT8 WMMA probe (AMD intrinsics + DP4A control)", &experiments::RunWmmaInt8},
         {"wmma-fp16", "M07 FP16 WMMA + INT8/FP16/DP4A comparison", &experiments::RunWmmaFp16},
+        {"quantization", "M08 FP8/INT8 quantization contract (incl. AMD QuantizeLinear on hw)", &experiments::RunQuantization},
     };
     return kExperiments;
 }

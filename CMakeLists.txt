@@ -19,6 +19,7 @@ endforeach()
 # Experiment CLI — the single primary executable (docs/architecture.md §6).
 add_executable(rdna3-int8
     src/main.cpp
+    src/core/numerics.cpp
     src/gpu/device.cpp
     src/gpu/compute.cpp
     src/gpu/amdext.cpp
@@ -115,6 +116,32 @@ foreach(_k64_256 4 16)
     endif()
 endforeach()
 
+# M08: AMD's shipped QuantizeLinear operator, one CSO per baked
+# quantizationScale (ML2Code bakes scales into generated passes the same way;
+# the FSR4-real scale 0.014884727 comes from the v07 pre.hlsl downscale conv).
+# Compile flags match the shipped model header: -O3 -enable-16bit-types -HV 2021.
+set(M08_SCALES s1:1.0f s2p:2.0f spow2:0.0078125f sfsr:0.014884727f)
+foreach(_pair ${M08_SCALES})
+    string(REPLACE ":" ";" _pairList ${_pair})
+    list(GET _pairList 0 _suf)
+    list(GET _pairList 1 _scale)
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/quantize_${_suf}.cso
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -O3 -enable-16bit-types -HV 2021
+                -E quantize_amd -D "PROBE_SCALE=${_scale}" -I "${SHADER_INC}"
+                -Fo ${FSR4_SHADER_DIR}/quantize_${_suf}.cso
+                ${SHADER_SRC}/quantize_probe.hlsl
+        DEPENDS ${SHADER_SRC}/quantize_probe.hlsl
+                ${SHADER_SRC}/../amd/ml2code_runtime/config.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/globals.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/storage.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/tensor_int8.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/tensor_float16.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/tensor_float32.hlsli
+                ${SHADER_SRC}/../amd/ml2code_runtime/operators/int8_NHWC/QuantizeLinear.hlsli
+        COMMENT "dxc: quantize_probe.hlsl(scale=${_scale}) -> shaders/quantize_${_suf}.cso")
+endforeach()
+
 add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/vector_add.cso
     ${FSR4_SHADER_DIR}/int8_wmma_i8.cso
@@ -129,7 +156,11 @@ add_custom_target(compile_shaders DEPENDS
     ${FSR4_SHADER_DIR}/gemm_int8_dp4a_k64.cso
     ${FSR4_SHADER_DIR}/gemm_int8_wmma_k256.cso
     ${FSR4_SHADER_DIR}/gemm_fp16_wmma_k256.cso
-    ${FSR4_SHADER_DIR}/gemm_int8_dp4a_k256.cso)
+    ${FSR4_SHADER_DIR}/gemm_int8_dp4a_k256.cso
+    ${FSR4_SHADER_DIR}/quantize_s1.cso
+    ${FSR4_SHADER_DIR}/quantize_s2p.cso
+    ${FSR4_SHADER_DIR}/quantize_spow2.cso
+    ${FSR4_SHADER_DIR}/quantize_sfsr.cso)
 add_dependencies(rdna3-int8 compile_shaders)
 
 enable_testing()
@@ -149,3 +180,7 @@ add_test(NAME experiment_wmma_int8 COMMAND rdna3-int8 run wmma-int8)
 
 # M07 hardware test: FP16 WMMA + comparison must pass on this machine.
 add_test(NAME experiment_wmma_fp16 COMMAND rdna3-int8 run wmma-fp16)
+
+# M08 hardware test: quantization contract (incl. AMD's shipped QuantizeLinear
+# operator on this GPU) must pass.
+add_test(NAME experiment_quantization COMMAND rdna3-int8 run quantization)

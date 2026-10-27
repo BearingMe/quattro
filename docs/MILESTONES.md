@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M07 complete (see per-milestone status) |
+| Status | Roadmap — M01–M08 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -503,7 +503,7 @@ No attempt to optimize an entire neural network yet.
 
 ### M08 — FP8 and INT8 Quantization
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-006-quantization.md`](experiments/EXP-006-quantization.md))
 
 #### Objective
 
@@ -529,25 +529,25 @@ The formats and schemes actually used by FSR 4 must be established from evidence
 
 #### Checkpoints
 
-- [ ] C01: Implement FP8 decoding.
-- [ ] C02: Validate special FP8 values and edge cases.
-- [ ] C03: Implement symmetric INT8 quantization.
-- [ ] C04: Implement scaling and dequantization.
-- [ ] C05: Test per-tensor and per-channel approaches.
-- [ ] C06: Evaluate representative weight distributions.
-- [ ] C07: Evaluate activation distributions.
-- [ ] C08: Measure numerical error.
-- [ ] C09: Document which methods match observed AMD behavior.
+- [x] C01: Implement FP8 decoding.
+- [x] C02: Validate special FP8 values and edge cases.
+- [x] C03: Implement symmetric INT8 quantization.
+- [x] C04: Implement scaling and dequantization.
+- [x] C05: Test per-tensor and per-channel approaches.
+- [x] C06: Evaluate representative weight distributions.
+- [x] C07: Evaluate activation distributions.
+- [x] C08: Measure numerical error.
+- [x] C09: Document which methods match observed AMD behavior.
 
 #### Validation Gate
 
-- [ ] FP8 decoding passes independent reference tests.
-- [ ] INT8 quantization boundaries are correct.
-- [ ] Scaling and dequantization are verified.
-- [ ] Saturation behavior is characterized.
-- [ ] Error metrics are reported.
-- [ ] Quantization metadata is preserved.
-- [ ] AMD-specific claims are distinguished from generic experiments.
+- [x] FP8 decoding passes independent reference tests.
+- [x] INT8 quantization boundaries are correct.
+- [x] Scaling and dequantization are verified.
+- [x] Saturation behavior is characterized.
+- [x] Error metrics are reported.
+- [x] Quantization metadata is preserved.
+- [x] AMD-specific claims are distinguished from generic experiments.
 
 #### Deliverables
 

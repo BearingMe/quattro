@@ -5,13 +5,17 @@
 #include "../gpu/device.h"
 #include "../gpu/matmul.h"
 #include "../reference/reference.h"
+#include "core/numerics.h"
 
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
+#include <cmath>
 
 namespace experiments {
 namespace {
@@ -56,6 +60,14 @@ std::filesystem::path ReportsDir() {
         return {};
     const std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
     return exeDir / ".." / "reports" / "m06";
+}
+
+std::filesystem::path ReportsDirM08() {
+    wchar_t exePathW[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exePathW, MAX_PATH) == 0)
+        return {};
+    const std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+    return exeDir / ".." / "reports" / "m08";
 }
 
 } // namespace
@@ -258,15 +270,15 @@ int RunWmmaFp16() {
         // All arithmetic in float: (i % 17) - 8 in uint32 would underflow.
         const float av = float(i % 17) * 0.125f - 1.0f;                    // [-1, 1]
         const float bv = float((i * 7u) % 13u) * 0.125f - 0.75f;           // [-0.75, 0.75]
-        fa[i] = reference::F32ToF16(av);
-        fb[i] = reference::F32ToF16(bv);
+        fa[i] = core::F32ToF16(av);
+        fb[i] = core::F32ToF16(bv);
     }
     float initF32[256];
     for (uint32_t i = 0; i < 256; ++i)
         initF32[i] = float(i % 9) - 4.0f;
     uint16_t initF16[256];
     for (uint32_t i = 0; i < 256; ++i)
-        initF16[i] = reference::F32ToF16(initF32[i]);
+        initF16[i] = core::F32ToF16(initF32[i]);
 
     float expectedF32acc[256];
     uint16_t expectedF16acc[256];
@@ -463,8 +475,8 @@ int RunWmmaFp16() {
                     for (uint32_t e = 0; e < 256; ++e) {
                         a8[e] = uint8_t(((g * 256u + e + t) * 37u + 11u) & 0xFFu);
                         b8[e] = uint8_t(((g * 256u + e + t) * 53u + 29u) & 0xFFu);
-                        aF[e] = reference::F32ToF16(float(e % 17) * 0.125f - 1.0f);
-                        bF[e] = reference::F32ToF16(float((e * 7u) % 13u) * 0.125f - 0.75f);
+                        aF[e] = core::F32ToF16(float(e % 17) * 0.125f - 1.0f);
+                        bF[e] = core::F32ToF16(float((e * 7u) % 13u) * 0.125f - 0.75f);
                     }
                     int32_t tile8[256];
                     reference::CpuInt8Matmul16x16x16(a8, b8, acc8, tile8, 0);
@@ -605,6 +617,587 @@ int RunWmmaFp16() {
 
     gpu::ReleaseAmdExtensions(ext);
     std::printf("%s\n", ok ? "fp16 wmma + comparison: PASS" : "fp16 wmma + comparison: FAIL");
+    return ok ? 0 : 1;
+}
+
+int RunQuantization() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
+    bool ok = true;
+
+    // --- Part A (C01/C02): exhaustive FP8 decode + encode vs independent oracles. ---
+    float e4m3[256];
+    float e5m2[256];
+    reference::BuildE4M3Table(e4m3);
+    reference::BuildE5M2Table(e5m2);
+    {
+        size_t decodeMismatch = 0;
+        size_t roundTripMismatch = 0;
+        size_t nanCount = 0;
+        for (uint32_t b = 0; b < 256; ++b) {
+            const float decoded = core::E4M3ToF32(uint8_t(b));
+            const float oracle = e4m3[b];
+            const bool bothNan = std::isnan(decoded) && std::isnan(oracle);
+            if (!bothNan && decoded != oracle)
+                ++decodeMismatch;
+            if (bothNan)
+                ++nanCount;
+            // Round-trip: encode(decode(b)) == b for every non-NaN encoding.
+            if (!bothNan && core::F32ToE4M3(decoded) != b)
+                ++roundTripMismatch;
+        }
+        // Sign symmetry: decode(b ^ 0x80) == -decode(b) for all non-NaN.
+        size_t signMismatch = 0;
+        for (uint32_t b = 1; b < 128; ++b) {
+            if (!(std::isnan(e4m3[b]) || std::isnan(e4m3[b | 0x80])) &&
+                e4m3[b | 0x80] != -e4m3[b])
+                ++signMismatch;
+        }
+        // Monotonicity across the finite positive range 0x01..0x7E.
+        for (uint32_t b = 1; b < 0x7E; ++b)
+            if (!(e4m3[b] < e4m3[b + 1])) {
+                ++decodeMismatch;
+                std::fprintf(stderr, "  e4m3 monotonicity break at 0x%02X\n", b);
+            }
+        // Hand-derived spec spot values (OCP OFP8).
+        struct Spot { uint8_t enc; float value; };
+        const Spot e4m3Spots[] = {
+            {0x00, 0.0f}, {0x80, -0.0f}, {0x38, 1.0f}, {0x37, 0.9375f},
+            {0x07, 7.0f / 512.0f}, {0x40, 2.0f}, {0x78, 256.0f}, {0x7E, 448.0f},
+            {0x7F, std::numeric_limits<float>::quiet_NaN()},
+        };
+        for (const Spot& spot : e4m3Spots) {
+            const float got = core::E4M3ToF32(spot.enc);
+            if (std::isnan(spot.value) ? !std::isnan(got) : got != spot.value) {
+                std::fprintf(stderr, "  e4m3 spot value 0x%02X: got %.9g expected %.9g\n",
+                             spot.enc, got, spot.value);
+                ++decodeMismatch;
+            }
+        }
+
+        std::printf("fp8 e4m3: decode mismatches %zu, round-trip mismatches %zu, "
+                    "sign-symmetry mismatches %zu, NaN encodings %zu/2\n",
+                    decodeMismatch, roundTripMismatch, signMismatch, nanCount);
+        if (decodeMismatch || roundTripMismatch || signMismatch || nanCount != 2)
+            ok = false;
+    }
+    {
+        size_t decodeMismatch = 0;
+        size_t roundTripMismatch = 0;
+        for (uint32_t b = 0; b < 256; ++b) {
+            const float decoded = core::E5M2ToF32(uint8_t(b));
+            const float oracle = e5m2[b];
+            const bool bothNan = std::isnan(decoded) && std::isnan(oracle);
+            // Saturating encode maps ±inf onto max finite by design — those
+            // two encodings cannot round-trip (documented policy).
+            const bool isInf = std::isinf(decoded);
+            if (!bothNan && decoded != oracle)
+                ++decodeMismatch;
+            if (!bothNan && !isInf && core::F32ToE5M2(decoded) != b)
+                ++roundTripMismatch;
+        }
+        struct Spot { uint8_t enc; float value; };
+        const Spot e5m2Spots[] = {
+            {0x38, 0.5f}, {0x3C, 1.0f}, {0x44, 4.0f}, {0x7B, 57344.0f},
+            {0x01, std::ldexp(1.0f, -16)}, {0x7C, std::numeric_limits<float>::infinity()},
+        };
+        for (const Spot& spot : e5m2Spots) {
+            const float got = core::E5M2ToF32(spot.enc);
+            if (got != spot.value) {
+                std::fprintf(stderr, "  e5m2 spot value 0x%02X: got %.9g expected %.9g\n",
+                             spot.enc, got, spot.value);
+                ++decodeMismatch;
+            }
+        }
+        std::printf("fp8 e5m2: decode mismatches %zu, round-trip mismatches %zu\n",
+                    decodeMismatch, roundTripMismatch);
+        if (decodeMismatch || roundTripMismatch)
+            ok = false;
+    }
+    // FP16 exhaustive validation (the conversions M06/M07 rely on): all 65536
+    // encodings — decode vs an independently-composed formula, and
+    // encode(decode(b)) identity for every non-NaN encoding (NaN payloads are
+    // canonicalized to qNaN by design — documented in numerics.h).
+    {
+        size_t decodeMismatch = 0;
+        size_t roundTripMismatch = 0;
+        for (uint32_t b = 0; b < 65536; ++b) {
+            const uint16_t bits = uint16_t(b);
+            const float decoded = core::F16ToF32(bits);
+            const uint32_t sign = uint32_t(bits & 0x8000u) << 16;
+            const uint32_t expField = (bits >> 10) & 0x1Fu;
+            const uint32_t mant = bits & 0x03FFu;
+            float oracle;
+            if (expField == 0)
+                oracle = std::ldexp(float(mant), -24) * (sign ? -1.0f : 1.0f);
+            else if (expField == 31)
+                oracle = (mant == 0)
+                             ? (sign ? -std::numeric_limits<float>::infinity()
+                                     : std::numeric_limits<float>::infinity())
+                             : std::numeric_limits<float>::quiet_NaN();
+            else
+                oracle = std::ldexp(float(mant | 0x0400u), int(expField) - 25)
+                         * (sign ? -1.0f : 1.0f);
+            const bool bothNan = std::isnan(decoded) && std::isnan(oracle);
+            if (!bothNan && decoded != oracle)
+                ++decodeMismatch;
+            if (!bothNan && core::F32ToF16(decoded) != bits)
+                ++roundTripMismatch;
+        }
+        std::printf("fp16 exhaustive (65536 encodings): decode mismatches %zu, "
+                    "round-trip mismatches %zu\n",
+                    decodeMismatch, roundTripMismatch);
+        if (decodeMismatch || roundTripMismatch)
+            ok = false;
+    }
+    // Encode sweeps vs the linear-scan oracle (RNE): dense ranges around the
+    // tie-prone magnitudes plus a wide random sweep. Deterministic LCG.
+    {
+        uint32_t seed = 0x12345678u;
+        const auto next01 = [&seed] {
+            seed = seed * 1664525u + 1013904223u;
+            return float(seed >> 8) / float(1 << 24);
+        };
+        size_t e4Mismatch = 0;
+        size_t e5Mismatch = 0;
+        for (uint32_t i = 0; i < 60000; ++i) {
+            float v;
+            if (i < 20000) {
+                // Dense around the E4M3 max-finite / boundary magnitudes.
+                v = (next01() - 0.5f) * 1200.0f;
+            } else if (i < 40000) {
+                // Dense around E5M2 boundary magnitudes.
+                v = (next01() - 0.5f) * 130000.0f;
+            } else {
+                // Tiny denormal-range magnitudes.
+                v = (next01() - 0.5f) * std::ldexp(1.0f, -6);
+            }
+            if (core::F32ToE4M3(v) != reference::ReferenceEncodeE4M3(v))
+                ++e4Mismatch;
+            if (core::F32ToE5M2(v) != reference::ReferenceEncodeE5M2(v))
+                ++e5Mismatch;
+        }
+        std::printf("fp8 encode sweeps: e4m3 mismatches %zu, e5m2 mismatches %zu (60000 values each)\n",
+                    e4Mismatch, e5Mismatch);
+        if (e4Mismatch || e5Mismatch)
+            ok = false;
+    }
+
+    // --- Part B (C03/C04): symmetric INT8 quantize vs independent oracle. ---
+    {
+        const float scales[] = {1.0f, 0.0078125f, 0.014884727f, 2.0f};
+        size_t rneMismatch = 0;
+        size_t truncMismatch = 0;
+        uint32_t seed = 0xDEADBEEFu;
+        const auto next01 = [&seed] {
+            seed = seed * 1664525u + 1013904223u;
+            return float(seed >> 8) / float(1 << 24);
+        };
+        for (const float scale : scales) {
+            for (uint32_t i = 0; i < 20000; ++i) {
+                const float v = (next01() - 0.5f) * 600.0f * scale;
+                if (core::QuantizeSymmetricS8(v, scale, core::QuantizeRounding::RoundNearestEven) !=
+                    reference::ReferenceQuantizeS8(v, scale, true))
+                    ++rneMismatch;
+                if (core::QuantizeSymmetricS8(v, scale, core::QuantizeRounding::TowardZero) !=
+                    reference::ReferenceQuantizeS8(v, scale, false))
+                    ++truncMismatch;
+            }
+            // Deliberate boundary values around the clamp and halfway points.
+            const float boundary[] = {-130.0f, -128.5f, -128.0f, -127.5f, -127.0f, -0.5f, 0.0f,
+                                      0.5f, 127.0f, 127.49f, 127.5f, 128.0f, 1000.0f};
+            for (const float b : boundary) {
+                const float v = b * scale;
+                if (core::QuantizeSymmetricS8(v, scale, core::QuantizeRounding::RoundNearestEven) !=
+                    reference::ReferenceQuantizeS8(v, scale, true))
+                    ++rneMismatch;
+            }
+        }
+        std::printf("int8 quantize vs oracle: RNE mismatches %zu, truncate mismatches %zu\n",
+                    rneMismatch, truncMismatch);
+        if (rneMismatch || truncMismatch)
+            ok = false;
+
+        // Dequant round-trip bound: |dequant(q) - v| <= scale/2 (+fp32 eps).
+        size_t boundViolations = 0;
+        for (const float scale : scales) {
+            for (uint32_t i = 0; i < 20000; ++i) {
+                const float v = (next01() - 0.5f) * 100.0f * scale;
+                const int8_t q = core::QuantizeSymmetricS8(
+                    v, scale, core::QuantizeRounding::RoundNearestEven);
+                const float back = core::DequantizeSymmetricS8(q, scale);
+                if (std::fabs(back - v) > scale * 0.5f + scale * 1e-6f)
+                    ++boundViolations;
+            }
+        }
+        std::printf("int8 dequant round-trip: %zu violations of the |e| <= scale/2 bound\n",
+                    boundViolations);
+        if (boundViolations)
+            ok = false;
+    }
+
+    // --- Part C (C05) + Part D (C06/C07/C08): synthetic distributions,
+    // per-tensor vs per-channel, error metrics. All generic experiments —
+    // the AMD-behavior claims live in the source citations + Part E. ---
+    {
+        uint32_t seed = 0x51A7B3C9u;
+        const auto next01 = [&seed] {
+            seed = seed * 1664525u + 1013904223u;
+            return float(seed >> 8) / float(1 << 24);
+        };
+        const auto nextGauss = [&next01] {
+            // Box-Muller (deterministic LCG input).
+            const float u1 = std::max(next01(), 1e-12f);
+            const float u2 = next01();
+            return std::sqrt(-2.0f * std::log(u1)) * std::cos(6.2831853f * u2);
+        };
+
+        constexpr uint32_t kChannels = 8;
+        constexpr uint32_t kPerChannel = 512;
+        constexpr uint32_t kCount = kChannels * kPerChannel;
+
+        // C05: gaussian weights with one 20x outlier channel.
+        {
+            std::vector<float> w(kCount);
+            for (uint32_t c = 0; c < kChannels; ++c)
+                for (uint32_t i = 0; i < kPerChannel; ++i)
+                    w[c * kPerChannel + i] = nextGauss() * (c == 3 ? 20.0f : 1.0f);
+
+            float dequant[kCount];
+            int8_t q[kCount];
+
+            // Per-tensor: scale = maxAbs/127 across ALL channels.
+            float globalMax = 0.0f;
+            for (float v : w)
+                globalMax = std::max(globalMax, std::fabs(v));
+            const float tensorScale = globalMax / 127.0f;
+            for (uint32_t i = 0; i < kCount; ++i) {
+                q[i] = core::QuantizeSymmetricS8(w[i], tensorScale,
+                                                 core::QuantizeRounding::RoundNearestEven);
+                dequant[i] = core::DequantizeSymmetricS8(q[i], tensorScale);
+            }
+            const reference::QuantErrorStats tensorStats =
+                reference::ComputeQuantError(w.data(), q, dequant, kCount);
+
+            // Per-channel: one scale per channel.
+            double sqnrSum = 0.0;
+            size_t perChannelClipped = 0;
+            float perChannelMaxErr = 0.0f;
+            for (uint32_t c = 0; c < kChannels; ++c) {
+                float cMax = 0.0f;
+                for (uint32_t i = 0; i < kPerChannel; ++i)
+                    cMax = std::max(cMax, std::fabs(w[c * kPerChannel + i]));
+                const float cScale = cMax / 127.0f;
+                for (uint32_t i = 0; i < kPerChannel; ++i) {
+                    const size_t idx = c * kPerChannel + i;
+                    q[idx] = core::QuantizeSymmetricS8(w[idx], cScale,
+                                                       core::QuantizeRounding::RoundNearestEven);
+                    dequant[idx] = core::DequantizeSymmetricS8(q[idx], cScale);
+                }
+                const reference::QuantErrorStats cs =
+                    reference::ComputeQuantError(w.data() + c * kPerChannel, q + c * kPerChannel,
+                                                 dequant + c * kPerChannel, kPerChannel);
+                sqnrSum += cs.sqnrDb;
+                perChannelClipped += size_t(cs.clipFrac * kPerChannel);
+                perChannelMaxErr = std::max(perChannelMaxErr, float(cs.maxAbsErr));
+            }
+            std::printf("per-tensor vs per-channel (outlier gaussian, 8ch): "
+                        "SQNR %.2f dB vs %.2f dB (avg), clip %.3f%% vs %.3f%%\n",
+                        tensorStats.sqnrDb, sqnrSum / kChannels,
+                        tensorStats.clipFrac * 100.0, double(perChannelClipped) / kCount * 100.0);
+        }
+
+        // C06/C07/C08: distribution x scale-policy error table.
+        struct Dist {
+            const char* name;
+            std::vector<float> values;
+        };
+        std::vector<Dist> dists;
+        {
+            std::vector<float> g01(kCount);
+            std::vector<float> g1(kCount);
+            std::vector<float> uni(kCount);
+            std::vector<float> lap(kCount);
+            std::vector<float> rel(kCount);
+            std::vector<float> col(kCount);
+            for (uint32_t i = 0; i < kCount; ++i) {
+                const float g = nextGauss();
+                g01[i] = g * 0.01f;
+                g1[i] = g;
+                uni[i] = next01() * 2.0f - 1.0f;
+                const float u = next01() - 0.5f;
+                lap[i] = std::copysign(-std::log(std::max(std::fabs(u), 1e-12f)) * 0.1f, u);
+                rel[i] = std::max(0.0f, nextGauss() * 0.5f);
+                col[i] = next01() * 2.0f - 1.0f; // FSR4 normalizes color to [-1, 1]
+            }
+            dists.push_back({"gauss sigma=0.01", std::move(g01)});
+            dists.push_back({"gauss sigma=1", std::move(g1)});
+            dists.push_back({"uniform [-1,1]", std::move(uni)});
+            dists.push_back({"laplace 0.1", std::move(lap)});
+            dists.push_back({"relu(gauss*0.5)", std::move(rel)});
+            dists.push_back({"fsr4 color [-1,1]", std::move(col)});
+        }
+
+        std::string report = "distribution,scale_policy,scale,max_abs_err,mae,rmse,sqnr_db,clip_pct\n";
+        for (const Dist& d : dists) {
+            float absMax = 0.0f;
+            double mean = 0.0;
+            for (float v : d.values) {
+                absMax = std::max(absMax, std::fabs(v));
+                mean += v;
+            }
+            mean /= kCount;
+            // Second moment for the sigma-based scale policy.
+            double var = 0.0;
+            for (float v : d.values)
+                var += (v - mean) * (v - mean);
+            var /= kCount;
+            const float sigma = float(std::sqrt(var));
+
+            const float policyScales[2] = {absMax / 127.0f, std::max(sigma * 3.0f, 1e-9f)};
+            const char* policyNames[2] = {"absmax", "3sigma"};
+            for (uint32_t p = 0; p < 2; ++p) {
+                const float scale = policyScales[p];
+                std::vector<int8_t> q(kCount);
+                std::vector<float> dequant(kCount);
+                for (uint32_t i = 0; i < kCount; ++i) {
+                    q[i] = core::QuantizeSymmetricS8(d.values[i], scale,
+                                                     core::QuantizeRounding::RoundNearestEven);
+                    dequant[i] = core::DequantizeSymmetricS8(q[i], scale);
+                }
+                const reference::QuantErrorStats s =
+                    reference::ComputeQuantError(d.values.data(), q.data(), dequant.data(), kCount);
+                char line[256];
+                std::snprintf(line, sizeof(line), "%s,%s,%.9g,%.6g,%.6g,%.6g,%.2f,%.3f\n",
+                              d.name, policyNames[p], scale, s.maxAbsErr, s.mae, s.rmse,
+                              s.sqnrDb, s.clipFrac * 100.0);
+                report += line;
+            }
+        }
+        SaveReport(ReportsDirM08(), "distributions.csv", report);
+        std::printf("distribution error table: %zu rows -> build/reports/m08/distributions.csv\n",
+                    dists.size() * 2);
+    }
+
+    // --- Part E (C09): AMD's shipped QuantizeLinear on gfx1101 vs the CPU
+    // contract. Finite inputs: bit-exact required. Special inputs (NaN/Inf):
+    // characterization only (recorded, reproducibility-enforced). ---
+    {
+        gpu::DeviceContext ctx;
+        std::string error;
+        if (!gpu::CreateComputeDevice(ctx, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            return 1;
+        }
+        PrintAdapter(ctx.adapter);
+
+        gpu::ComPtr<ID3D12RootSignature> rootSignature;
+        if (!gpu::CreateGemmTileRootSignature(ctx, rootSignature, error)) {
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+            return 1;
+        }
+
+        // Deterministic 256-value fp16 test vector per scale: grid points,
+        // halfway ties (exact for the power-of-two scale), saturators,
+        // tiny/denormal fp16s, zeros.
+        const float scales[4] = {1.0f, 2.0f, 0.0078125f, 0.014884727f};
+        const char* scaleNames[4] = {"s1", "s2p", "spow2", "sfsr"};
+        const char* csos[4] = {"quantize_s1", "quantize_s2p", "quantize_spow2", "quantize_sfsr"};
+
+        uint16_t inputs[256];
+        uint32_t idx = 0;
+        for (int k = -64; k < 64; ++k) // grid points
+            inputs[idx++] = core::F32ToF16(float(k) * scales[2]);
+        for (int k = -32; k < 32; ++k) // halfway ties
+            inputs[idx++] = core::F32ToF16((float(k) + 0.5f) * scales[2]);
+        const float saturators[] = {127.49f, 127.5f, 127.51f, 128.49f, 200.0f, 1000.0f,
+                                    300.0f, 65504.0f};
+        for (float s : saturators) {
+            inputs[idx++] = core::F32ToF16(s * 1.0f);
+            inputs[idx++] = core::F32ToF16(-s * 1.0f);
+            inputs[idx++] = core::F32ToF16(s * 0.0078125f);
+            inputs[idx++] = core::F32ToF16(-s * 0.0078125f);
+        }
+        for (uint16_t pat = 0x0001; pat <= 0x0008; ++pat) { // fp16 denormals
+            inputs[idx++] = pat;
+            inputs[idx++] = uint16_t(pat | 0x8000);
+        }
+        inputs[idx++] = 0x0000;  // +0
+        inputs[idx++] = 0x8000;  // -0
+        while (idx < 256)
+            inputs[idx++] = core::F32ToF16(float(idx % 251) - 125.0f); // filler
+
+        for (uint32_t s = 0; s < 4 && ok; ++s) {
+            std::vector<uint8_t> cso;
+            if (!gpu::LoadShaderBytecode(csos[s], cso, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+                break;
+            }
+            D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+            psoDesc.pRootSignature = rootSignature.Get();
+            psoDesc.CS = {cso.data(), cso.size()};
+            gpu::ComPtr<ID3D12PipelineState> pso;
+            if (FAILED(ctx.device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
+                std::fprintf(stderr, "error: CreateComputePipelineState (%s) failed\n", csos[s]);
+                ok = false;
+                break;
+            }
+
+            gpu::MatmulRunResult timing;
+            std::vector<int32_t> outWarmup;
+            std::vector<int32_t> outTimed;
+            if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(inputs), 256,
+                                  1, 1, 1, inputs, outWarmup, outTimed, timing, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+                break;
+            }
+
+            // CPU contract on the same fp16 inputs.
+            const uint8_t* hwBytes = reinterpret_cast<const uint8_t*>(outWarmup.data());
+            size_t mismatches = 0;
+            for (uint32_t c = 0; c < 256; ++c) {
+                const float v = core::F16ToF32(inputs[c]);
+                const int8_t qCpu = core::QuantizeSymmetricS8(
+                    v, scales[s], core::QuantizeRounding::RoundNearestEven);
+                if (int8_t(hwBytes[c]) != qCpu) {
+                    if (mismatches < 8)
+                        std::fprintf(stderr, "  [%s] c=%u v=%.9g: hw %d vs cpu %d\n",
+                                     scaleNames[s], c, v, hwBytes[c], qCpu);
+                    ++mismatches;
+                }
+            }
+            std::printf("quantize_amd %s (scale %.9g): %zu/256 mismatches vs CPU contract\n",
+                        scaleNames[s], scales[s], mismatches);
+            if (mismatches)
+                ok = false;
+
+            // Idempotency: the timed snapshot must equal the warmup snapshot.
+            if (memcmp(outTimed.data(), outWarmup.data(), 256) != 0) {
+                std::fprintf(stderr, "  [%s] timed snapshot differs from warmup\n", scaleNames[s]);
+                ok = false;
+            }
+        }
+
+        // Special-value characterization (NaN/Inf through AMD's operator):
+        // recorded to the report; pass = reproducible across two dispatches.
+        if (ok) {
+            std::vector<uint8_t> cso;
+            if (!gpu::LoadShaderBytecode("quantize_s1", cso, error)) {
+                std::fprintf(stderr, "error: %s\n", error.c_str());
+                ok = false;
+            } else {
+                D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+                psoDesc.pRootSignature = rootSignature.Get();
+                psoDesc.CS = {cso.data(), cso.size()};
+                gpu::ComPtr<ID3D12PipelineState> pso;
+                if (FAILED(ctx.device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
+                    std::fprintf(stderr, "error: CreateComputePipelineState (special) failed\n");
+                    ok = false;
+                } else {
+                    const uint16_t special[256] = {
+                        0x7E00, 0x7C01, 0xFC01, 0x7C00, 0xFC00, 0x8000, 0x0001, 0x8001,
+                    }; // qNaN, sNaN payloads, +inf, -inf, -0, min denormals (repeated)
+                    uint16_t specialIn[256];
+                    for (uint32_t i = 0; i < 256; ++i)
+                        specialIn[i] = special[i % 8];
+
+                    gpu::MatmulRunResult timing;
+                    std::vector<int32_t> run1;
+                    std::vector<int32_t> run2;
+                    std::vector<int32_t> outTimed;
+                    if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(specialIn), 256,
+                                          1, 1, 1, specialIn, run1, outTimed, timing, error) ||
+                        !gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(specialIn), 256,
+                                          1, 1, 1, specialIn, run2, outTimed, timing, error)) {
+                        std::fprintf(stderr, "error: %s\n", error.c_str());
+                        ok = false;
+                    } else {
+                        // Position-dependence probe: the same 8 values shifted
+                        // by one channel — distinguishes value-based quirks
+                        // from lane/position-based ones (matters for M09 NaN
+                        // containment).
+                        uint16_t rotated[256];
+                        for (uint32_t i = 0; i < 256; ++i)
+                            rotated[i] = special[(i + 1) % 8];
+                        std::vector<int32_t> run3;
+                        std::vector<int32_t> outTimed3;
+                        if (!gpu::RunGemmTile(ctx, rootSignature, pso, sizeof(rotated), 256,
+                                              1, 1, 1, rotated, run3, outTimed3, timing, error)) {
+                            std::fprintf(stderr, "error: %s\n", error.c_str());
+                            ok = false;
+                        }
+
+                        const bool reproducible =
+                            memcmp(run1.data(), run2.data(), 256) == 0;
+                        // Byte address == channel index in the int8 tensor
+                        // (z-stride = 1): byte c holds channel c's result.
+                        std::string report =
+                            "AMD QuantizeLinear special-value characterization (scale 1.0)\n"
+                            "input_bits -> packed byte (= channel index) (cpu policy)\n";
+                        const uint8_t* bytes = reinterpret_cast<const uint8_t*>(run1.data());
+                        const uint8_t* rotBytes = reinterpret_cast<const uint8_t*>(run3.data());
+                        // Position-independence is ENFORCED: the result of a
+                        // value must not depend on its channel index.
+                        size_t posMismatches = 0;
+                        for (uint32_t i = 0; i < 8; ++i) {
+                            const float v = core::F16ToF32(special[i]);
+                            // Rotated dispatch: value special[i] sits at the
+                            // previous channel index.
+                            const uint32_t rotIdx = (i + 7) % 8;
+                            if (rotBytes[rotIdx] != bytes[i])
+                                ++posMismatches;
+                            char line[160];
+                            std::snprintf(line, sizeof(line),
+                                          "  0x%04X (v=%.9g) -> 0x%02X (cpu %d) | at channel %u -> 0x%02X\n",
+                                          special[i], v, bytes[i],
+                                          core::QuantizeSymmetricS8(
+                                              v, 1.0f, core::QuantizeRounding::RoundNearestEven),
+                                          rotIdx, rotBytes[rotIdx]);
+                            report += line;
+                        }
+                        if (posMismatches) {
+                            std::fprintf(stderr, "  position-dependence detected: %zu mismatches\n",
+                                         posMismatches);
+                            ok = false;
+                        }
+                        // CPU-policy equality for the special values is also
+                        // enforced — F9's containment claim depends on it.
+                        size_t policyMismatches = 0;
+                        for (uint32_t i = 0; i < 8; ++i) {
+                            const int8_t cpuQ = core::QuantizeSymmetricS8(
+                                core::F16ToF32(special[i]), 1.0f,
+                                core::QuantizeRounding::RoundNearestEven);
+                            if (int8_t(bytes[i]) != cpuQ)
+                                ++policyMismatches;
+                        }
+                        if (policyMismatches) {
+                            std::fprintf(stderr, "  special-value CPU-policy mismatch: %zu\n",
+                                         policyMismatches);
+                            ok = false;
+                        }
+                        SaveReport(ReportsDirM08(), "special_values.txt", report);
+                        std::printf("special values (NaN/Inf): %s; details -> "
+                                    "build/reports/m08/special_values.txt\n",
+                                    reproducible ? "reproducible across runs" : "NOT REPRODUCIBLE");
+                        if (!reproducible)
+                            ok = false;
+                    }
+                }
+            }
+        }
+
+        std::string queueErrors;
+        if (!gpu::InfoQueueClean(ctx, queueErrors)) {
+            std::fprintf(stderr, "%s", queueErrors.c_str());
+            ok = false;
+        } else {
+            std::printf("diagnostics: no error-severity messages\n");
+        }
+    }
+
+    std::printf("%s\n", ok ? "quantization probe: PASS" : "quantization probe: FAIL");
     return ok ? 0 : 1;
 }
 

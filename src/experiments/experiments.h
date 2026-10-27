@@ -17,4 +17,10 @@ int RunWmmaInt8();
 // hardware comparison. Returns the CLI exit code.
 int RunWmmaFp16();
 
+// M08 — FP8 E4M3/E5M2 + symmetric INT8 quantization: exhaustive CPU
+// validation vs independent oracles, quantization error metrics over
+// representative distributions, and AMD's shipped QuantizeLinear operator
+// executed on gfx1101 as the C09 hardware reference. Returns the CLI exit code.
+int RunQuantization();
+
 } // namespace experiments
