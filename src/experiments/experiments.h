@@ -40,4 +40,14 @@ int RunFixedNetworkReference();
 // comparison, repeated execution, end-to-end timing).
 int RunFixedNetworkGpu();
 
+// M12 reference oracle: executes the pinned FSR 4 v07 INT8 (1080p) model passes
+// from the read-only research tree and captures the tensors our reproduction
+// must match. Not the M12 gate.
+int RunFsr4Oracle();
+
+// M12 incremental reproduction validation (only when model data is available).
+int RunFsr4Weights();
+int RunFsr4Pass0();
+int RunFsr4Cnb();
+
 } // namespace experiments

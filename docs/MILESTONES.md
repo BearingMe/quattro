@@ -750,7 +750,39 @@ No FSR 4-specific model implementation yet.
 
 ### M12 — FSR 4 Model Reproduction
 
-**Status:** ☐ proposed
+**Status:** ◐ in progress — C01–C03 and C05 have evidence. Independent passes
+0/1/2/12 execute; C04 and C06–C09 remain incomplete. The gate is **UNVERIFIED**:
+the full reproduction graph does not execute yet. See
+[`experiments/EXP-010-fsr4-model-graph.md`](experiments/EXP-010-fsr4-model-graph.md)
+and [`findings/2026-10-27-fsr4-v07-graph.md`](findings/2026-10-27-fsr4-v07-graph.md).
+Operator/weight evidence:
+[`experiments/EXP-011-fsr4-reproduction-operators.md`](experiments/EXP-011-fsr4-reproduction-operators.md).
+
+Selected reference: **FSR 4.0.2, model `fsr4_model_v07_i8_quality`, 1080p**
+(`FSR-4.0.2-reference` @ `c5e34b4`) — not FSR 4.1, whose graph is closed.
+
+[M] Reference established (2026-10-27): the 14-pass graph was extracted
+mechanically (4 fused block families, 67 embedded weight arrays + 11 initializer
+tensors, 20,736,000 B scratch) and the shipped passes execute on gfx1101 as the
+numeric reference (1920×1080×8 FP16, no NaN/Inf). Passes 0–10 are
+bit-deterministic; pass 11 stores past its logical width without a predicate, so
+the reference itself varies in x<132 for the recorded fixture. Difference
+counts vary by run; percentages refer to output halfwords, not pixels.
+The explicit predication control and retained multi-run captures are described
+in EXP-010. The gate is not met.
+
+[M] Independent operator progress: our input convolution matches the shipped
+pass 0 on three fixtures; our native-WMMA ConvNextBlocks match isolated passes
+1/2/12 on zero and full-range INT8 fixtures. Weight loading validates all 78
+descriptors over a pinned 136,848-byte payload (C05). Static metadata validation
+checks all 14 logical shapes, producer lifetimes and group/skip scales, but C06
+still requires the remaining operators' execution evidence. See EXP-011.
+
+[M] Checkpoint validation: **Debug 18/18 PASS (286.60 s)** and **Release 18/18
+PASS (281.94 s)**, with verbose exact-comparison/repeat evidence and separate
+artifact-identity manifests under `build/reports/m12/`. Adversarial review
+accepted the partial checkpoint conditional on these results. **M12 gate:
+UNVERIFIED**, not PASS; ten model passes and full-graph integration remain.
 
 #### Objective
 
@@ -777,11 +809,11 @@ Use a fixed version of the model as the reference. Do not silently mix different
 
 #### Checkpoints
 
-- [ ] C01: Select and pin the reference model version.
-- [ ] C02: Establish model artifact availability.
-- [ ] C03: Reproduce the known execution graph.
+- [x] C01: Select and pin the reference model version.
+- [x] C02: Establish model artifact availability.
+- [x] C03: Reproduce the known execution graph.
 - [ ] C04: Implement required missing operations.
-- [ ] C05: Load the available model weights.
+- [x] C05: Load the available model weights.
 - [ ] C06: Validate intermediate tensor dimensions.
 - [ ] C07: Execute the complete graph.
 - [ ] C08: Compare against an available reference.

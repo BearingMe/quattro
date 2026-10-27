@@ -33,6 +33,12 @@ const std::vector<Experiment>& experiments() {
         {"tensor-ops", "M10 neural tensor operations and precision boundaries", &experiments::RunTensorOps},
         {"m11-reference", "M11 fixed-network CPU reference checks only", &experiments::RunFixedNetworkReference},
         {"fixed-network", "M11 standalone INT8 network inference on native WMMA (end-to-end)", &experiments::RunFixedNetworkGpu},
+        {"fsr4-oracle", "M12 reference oracle: pinned FSR 4 v07 INT8 model passes (comparison reference only)", &experiments::RunFsr4Oracle},
+#ifdef QUATTRO_M12_MODEL_AVAILABLE
+        {"fsr4-weights", "M12 checked model weight loading and corruption rejection", &experiments::RunFsr4Weights},
+        {"fsr4-pass0", "M12 our input convolution vs reference (1/14 passes, not the gate)", &experiments::RunFsr4Pass0},
+        {"fsr4-cnb", "M12 our native WMMA ConvNextBlocks vs isolated reference passes", &experiments::RunFsr4Cnb},
+#endif
     };
     return kExperiments;
 }
