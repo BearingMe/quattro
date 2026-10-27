@@ -21,15 +21,15 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 
 ## Unknowns
 
-- [U] Whether driver 32.0.32015.7029 exposes Cooperative Vector (and at what op/format set) on gfx1101 → M1/M3 `CheckFeatureSupport` probe.
+- [U] Whether driver 32.0.32015.7029 exposes Cooperative Vector (and at what op/format set) on gfx1101 → M05/M06 `CheckFeatureSupport` probe.
 - [U] What DXC emits (ISA) for INT8 matmul candidates on gfx1101; whether WMMA instructions are reachable through any D3D12 path here, or emulation occurs.
 - [U] INT8 WMMA latency/throughput in practice on gfx1101 (no public measurement found).
 
 ## Questions requiring experiments
 
-1. Compile probe kernels with DXC (SM 6.4 dot4, SM 6.9 CoopVec if driver allows) and inspect ISA — RGA or driver disassembly (M2/M3).
+1. Compile probe kernels with DXC (SM 6.4 dot4, SM 6.9 CoopVec if driver allows) and inspect ISA — RGA or driver disassembly (M06).
 2. Measure packed-dot vs scalar INT8 on **gfx1101** — on gfx1151, scalar INT8 beat packed `amd_mixed_dot` by ~32% [M, source-audited: lhl repo README]; do not transfer that result.
-3. Quantify WMMA vs DP4A throughput for FSR-shaped conv tiles (M4).
+3. Quantify WMMA vs DP4A throughput for FSR-shaped conv tiles (M07).
 
 ## Sources
 

@@ -174,7 +174,7 @@ Establish a minimal, reproducible development environment.
 
 ### M02 — Reference Collection
 
-**Status:** ☑ complete (2026-10-27 — see [`.references/`](../.references/README.md), commit `c3af362`)
+**Status:** ☑ complete (2026-10-27 — see [`.references/`](../.references/README.md), commit `c3af362`; re-verified 2026-10-27: all four submodule pins intact, legacy M0–M7 milestone references remapped to M01–M15)
 
 #### Objective
 

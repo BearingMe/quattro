@@ -28,7 +28,7 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 ## Questions requiring experiments
 
 1. Map the pass graph: for each of the 14 model passes, list tensor inputs/outputs and shapes from generated HLSL + initializers (EXP-002 candidate).
-2. Identify where `dot4add_i8packed` vs WMMA vs plain F16/F32 math occurs per pass (feeds M5 kernel design).
+2. Identify where `dot4add_i8packed` vs WMMA vs plain F16/F32 math occurs per pass (feeds M09 kernel design).
 
 ## Sources
 

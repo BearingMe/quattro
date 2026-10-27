@@ -27,7 +27,7 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 
 ## Questions requiring experiments
 
-1. Read `ffx_provider_fsr4_dx12.cpp` + `ml2code_runtime/` end-to-end; write a one-page execution-graph summary (tensor → pass → dispatch → barrier) (M6 groundwork).
+1. Read `ffx_provider_fsr4_dx12.cpp` + `ml2code_runtime/` end-to-end; write a one-page execution-graph summary (tensor → pass → dispatch → barrier) (M04 groundwork).
 2. Extract per-pass constant-buffer layouts from generated HLSL (feeds EXP-002 schema decode).
 
 ## Sources

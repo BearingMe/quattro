@@ -26,8 +26,8 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 
 ## Questions requiring experiments
 
-1. Wave32 vs Wave64 for INT8 convolution kernels on gfx1101 (occupancy × ISA study; M4).
-2. Measured memory behavior for ~20 MB scratch working sets vs L2/Infinity Cache (M4).
+1. Wave32 vs Wave64 for INT8 convolution kernels on gfx1101 (occupancy × ISA study; M07).
+2. Measured memory behavior for ~20 MB scratch working sets vs L2/Infinity Cache (M07).
 
 ## Sources
 

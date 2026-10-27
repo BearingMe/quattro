@@ -1,12 +1,12 @@
-# Environment baseline (M0)
+# Environment baseline (M01)
 
 Date: 2026-10-27
-Milestone: M0 (gate record)
+Milestone: M01 (gate record)
 Type: environment verification — measurements on the target machine plus documented facts.
 
 ## Summary
 
-Target hardware and OS verified on-machine. Project identity confirmed: **RX 7700 XT = Navi 32 = gfx1101** (AMD official docs + observed PCI IDs agree). D3D12 feature level 12_2, WDDM 3.2. Toolchain present: VS 2022, Windows SDK 26100 (DXC 1.8), CMake/Ninja/Python/Git. HIP SDK intentionally absent. Key open question carried forward: SM 6.9 Cooperative Vector / DirectX Linear Algebra driver support on gfx1101 (decides the M3 path).
+Target hardware and OS verified on-machine. Project identity confirmed: **RX 7700 XT = Navi 32 = gfx1101** (AMD official docs + observed PCI IDs agree). D3D12 feature level 12_2, WDDM 3.2. Toolchain present: VS 2022, Windows SDK 26100 (DXC 1.8), CMake/Ninja/Python/Git. HIP SDK intentionally absent. Key open question carried forward: SM 6.9 Cooperative Vector / DirectX Linear Algebra driver support on gfx1101 (decides the M06 path).
 
 ## Hardware
 
@@ -16,7 +16,7 @@ Target hardware and OS verified on-machine. Project identity confirmed: **RX 770
 - [D] PCI device `1002:747E` = Navi 32 [Radeon RX 7700 XT / 7800 XT] — matches the observed `0x747E`.
   Source: linux-hardware.org PCI database, https://linux-hardware.org/?id=pci:1002-747e-1da2-d475 (accessed 2026-10-27; secondary source corroborating the AMD mapping)
 - [M] D3D12 feature levels: `12_2, 12_1, 12_0, ...`; driver model **WDDM 3.2**. Measured via dxdiag XML export.
-- [M] A second adapter, **"SudoMaker Virtual Display Adapter"** (WDDM 3.2), is present, and its dxdiag entry reports the *same* DeviceID `0x747E`, Vendor `0x1002`, and VRAM as the physical card. Consequence: M1 must select the physical AMD adapter explicitly (e.g., by enumeration + verification), never "the first adapter".
+- [M] A second adapter, **"SudoMaker Virtual Display Adapter"** (WDDM 3.2), is present, and its dxdiag entry reports the *same* DeviceID `0x747E`, Vendor `0x1002`, and VRAM as the physical card. Consequence: M05 must select the physical AMD adapter explicitly (e.g., by enumeration + verification), never "the first adapter".
 
 ## OS
 
@@ -28,7 +28,7 @@ Target hardware and OS verified on-machine. Project identity confirmed: **RX 770
 - [M] Windows SDK **10.0.26100.0**; `dxc.exe` version **1.8.2502.11** at `Windows Kits\10\bin\10.0.26100.0\x64`.
 - [M] CMake, Ninja, Python 3.13, Git available on PATH.
 - [M] HIP SDK not installed (`C:\Program Files\AMD\HIP` absent) — consistent with the plan (D3D12/HLSL first; HIP only as a later comparison).
-- [M] Adrenalin driver store present (`u0205306.inf`, driver 32.0.32015.7029, files dated 2026-10-18). Note: `amd_fidelityfx_dx12.dll` v1.0.1.39157 exists in `system32` — a driver-side FidelityFX component; potential relevance to M6 (FSR 4 execution path). Role: [U].
+- [M] Adrenalin driver store present (`u0205306.inf`, driver 32.0.32015.7029, files dated 2026-10-18). Note: `amd_fidelityfx_dx12.dll` v1.0.1.39157 exists in `system32` — a driver-side FidelityFX component; potential relevance to M04 (FSR 4 architecture investigation). Role: [U].
 
 ## Case-study background
 
@@ -41,13 +41,13 @@ Target hardware and OS verified on-machine. Project identity confirmed: **RX 770
 - [D] Press-level documentation: RDNA 4 executes FSR 4.1 in FP8; the RDNA 3 build is an **INT8** model of the same (or near-identical) network; INT8 is more demanding on RDNA 3 than FP8 on RDNA 4.
   Sources: TechSpot — https://www.techspot.com/article/3142-amd-fsr-4-upscaling-rdna-3 (2026-07-02); gamegpu — https://en.gamegpu.com/news/zhelezo/glubokoe-testirovanie-tekhnologii-masshtabirovaniya-amd-fsr-4-1-na-arkhitekture-rdna-3 (2026-07-01, summarizing Hardware Unboxed / ComputerBase) (accessed 2026-10-27). Treated as `[D]` from secondary press pending primary AMD statements.
 
-## Open questions (feeding M1–M3)
+## Open questions (feeding M03–M06)
 
 - [U] Does driver 32.0.32015.7029 expose SM 6.9 **Cooperative Vector** (and/or DirectX Linear Algebra) on gfx1101 via `CheckFeatureSupport`? `[H]` likely yes (Oct 2026 driver + AMD GDC 2026 statements) — must be verified, not assumed.
 - [U] Which INT8 operations map to WMMA on RDNA 3 through Cooperative Vector, and what is emulated where hardware doesn't support an op?
-- [U] Exact semantics of INT8→INT32 accumulation reachable from HLSL (M2/M3 experiments).
-- [U] DXC shipped with the SDK (1.8.2502) predates SM 6.9 retail (DXC 1.9.2602+); M3 will require a newer standalone DXC plus Agility SDK. Not installed yet.
-- [U] Role of `amd_fidelityfx_dx12.dll` and driver-store components in the FSR 4 RDNA 3 path (M6).
+- [U] Exact semantics of INT8→INT32 accumulation reachable from HLSL (M06 experiments).
+- [U] DXC shipped with the SDK (1.8.2502) predates SM 6.9 retail (DXC 1.9.2602+); M06 will require a newer standalone DXC plus Agility SDK. Not installed yet.
+- [U] Role of `amd_fidelityfx_dx12.dll` and driver-store components in the FSR 4 RDNA 3 path (M04).
 
 ## Sources
 

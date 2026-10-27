@@ -34,7 +34,7 @@ Upstream code is never modified. Every repository is pinned to one commit; updat
 
 | Repository | Reason to defer |
 |---|---|
-| [GPUOpen-Tools/radeon_gpu_analyzer](https://github.com/GPUOpen-Tools/radeon_gpu_analyzer) (MIT, ~574 MB) | Offline HLSL→RDNA ISA compiler — the tool of choice for M2/M3 ISA verification, but large and not needed before then. Use its release binaries; add as submodule only if source study is required. |
+| [GPUOpen-Tools/radeon_gpu_analyzer](https://github.com/GPUOpen-Tools/radeon_gpu_analyzer) (MIT, ~574 MB) | Offline HLSL→RDNA ISA compiler — the tool of choice for M06 ISA verification, but large and not needed before then. Use its release binaries; add as submodule only if source study is required. |
 | [ROCm/rocm-examples](https://github.com/ROCm/rocm-examples) (MIT, ~46 MB) | HIP examples — relevant only if/when a HIP-comparison milestone starts. |
 | GPUOpen organization (misc.) | No additional repo with a clear active purpose beyond the four above; revisit per milestone. |
 
