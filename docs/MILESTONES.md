@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M04 complete (see per-milestone status) |
+| Status | Roadmap — M01–M05 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -340,7 +340,7 @@ A complete graph is not required if unavailable from legitimate references. Do n
 
 ### M05 — DirectX 12 Compute Foundation
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-003-d3d12-compute-harness.md`](experiments/EXP-003-d3d12-compute-harness.md))
 
 #### Objective
 
@@ -359,22 +359,22 @@ Establish a minimal native GPU compute environment.
 
 #### Checkpoints
 
-- [ ] C01: Create a D3D12 compute device.
-- [ ] C02: Compile an HLSL compute shader.
-- [ ] C03: Upload input data to the GPU.
-- [ ] C04: Execute an elementary compute operation.
-- [ ] C05: Read the results back.
-- [ ] C06: Implement GPU timestamp measurement.
-- [ ] C07: Enable relevant GPU validation diagnostics.
+- [x] C01: Create a D3D12 compute device.
+- [x] C02: Compile an HLSL compute shader.
+- [x] C03: Upload input data to the GPU.
+- [x] C04: Execute an elementary compute operation.
+- [x] C05: Read the results back.
+- [x] C06: Implement GPU timestamp measurement.
+- [x] C07: Enable relevant GPU validation diagnostics.
 
 #### Validation Gate
 
-- [ ] Compute dispatch executes successfully.
-- [ ] Results match an independent CPU reference.
-- [ ] Resource synchronization is correct.
-- [ ] Debug diagnostics report no relevant errors.
-- [ ] GPU execution time can be measured.
-- [ ] Repeated executions produce consistent results.
+- [x] Compute dispatch executes successfully.
+- [x] Results match an independent CPU reference.
+- [x] Resource synchronization is correct.
+- [x] Debug diagnostics report no relevant errors.
+- [x] GPU execution time can be measured.
+- [x] Repeated executions produce consistent results.
 
 #### Deliverables
 

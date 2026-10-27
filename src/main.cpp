@@ -7,22 +7,25 @@
 // Exit codes: 0 success · 1 experiment failure · 2 usage error.
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
+
+#include "experiments/experiments.h"
 
 namespace {
 
 struct Experiment {
     const char* name;
     const char* description;
+    int (*run)(); // CLI exit code: 0 pass, 1 failure
 };
 
 // Explicit registration point (docs/architecture.md §6).
-// No experiments exist yet — M01 bootstrap only.
+// Registered when their milestone authorizes them.
 const std::vector<Experiment>& experiments() {
     static const std::vector<Experiment> kExperiments = {
-        // Register experiments here, e.g.:
-        // {"wmma-int8", "Native INT8 WMMA correctness (M06)"},
+        {"d3d12-compute", "M05 D3D12 compute harness validation", &experiments::RunComputeHarness},
     };
     return kExperiments;
 }
@@ -55,10 +58,9 @@ int listExperiments() {
 
 int runExperiment(const char* name) {
     for (const Experiment& e : experiments()) {
-        if (name == e.name) {
+        if (std::strcmp(name, e.name) == 0) {
             std::printf("running %s ...\n", e.name);
-            // Dispatch to the experiment implementation here as it lands.
-            return 0;
+            return e.run();
         }
     }
     std::fprintf(stderr,
