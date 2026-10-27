@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M03 complete (see per-milestone status) |
+| Status | Roadmap — M01–M04 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -276,7 +276,7 @@ Do not modify or reimplement the model.
 
 ### M04 — FSR 4 Architecture Investigation
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`findings/2026-10-27-fsr4-architecture.md`](findings/2026-10-27-fsr4-architecture.md))
 
 #### Objective
 
@@ -302,24 +302,24 @@ Distinguish established facts from hypotheses. Do not assume the FP8 and INT8 ne
 
 #### Checkpoints
 
-- [ ] C01: Document model inputs and outputs.
-- [ ] C02: Identify available model representations.
-- [ ] C03: Reconstruct the known execution graph.
-- [ ] C04: Identify quantization and scaling operations.
-- [ ] C05: Identify network operations requiring reproduction.
-- [ ] C06: Identify intermediate tensor formats.
-- [ ] C07: Record version-specific implementation differences.
-- [ ] C08: Identify unavailable or proprietary components.
+- [x] C01: Document model inputs and outputs.
+- [x] C02: Identify available model representations.
+- [x] C03: Reconstruct the known execution graph.
+- [x] C04: Identify quantization and scaling operations.
+- [x] C05: Identify network operations requiring reproduction.
+- [x] C06: Identify intermediate tensor formats.
+- [x] C07: Record version-specific implementation differences.
+- [x] C08: Identify unavailable or proprietary components.
 
 #### Validation Gate
 
-- [ ] Known input and output contracts are documented.
-- [ ] Available network operations are identified.
-- [ ] Known tensor formats are documented.
-- [ ] Quantization assumptions are explicitly classified.
-- [ ] Every documented graph component has supporting evidence.
-- [ ] Missing graph information is clearly identified.
-- [ ] A concrete implementation feasibility assessment exists.
+- [x] Known input and output contracts are documented.
+- [x] Available network operations are identified.
+- [x] Known tensor formats are documented.
+- [x] Quantization assumptions are explicitly classified.
+- [x] Every documented graph component has supporting evidence.
+- [x] Missing graph information is clearly identified.
+- [x] A concrete implementation feasibility assessment exists.
 
 #### Deliverables
 
