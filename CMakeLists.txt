@@ -21,6 +21,8 @@ add_executable(rdna3-int8
     src/main.cpp
     src/gpu/device.cpp
     src/gpu/compute.cpp
+    src/gpu/amdext.cpp
+    src/gpu/matmul.cpp
     src/reference/reference.cpp
     src/experiments/experiments.cpp)
 
@@ -29,7 +31,9 @@ target_link_libraries(rdna3-int8 PRIVATE d3d12.lib dxgi.lib)
 if(MSVC)
     target_compile_options(rdna3-int8 PRIVATE /W4)
 endif()
-target_include_directories(rdna3-int8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(rdna3-int8 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
 
 # --- Offline HLSL compilation (DXC from the Windows SDK). ---
 # AGENTS.md documents the toolchain; override with -DDXC_EXECUTABLE=... if it moves.
@@ -40,15 +44,46 @@ if(NOT EXISTS "${DXC_EXECUTABLE}")
     message(FATAL_ERROR "dxc.exe not found at DXC_EXECUTABLE='${DXC_EXECUTABLE}'")
 endif()
 
+set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders)
+# Vendored AMD AmdExtD3D headers live here; shaders include them as "AmdExtD3D/...".
+set(SHADER_INC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/amd)
 set(FSR4_SHADER_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders)
+
 add_custom_command(
     OUTPUT ${FSR4_SHADER_DIR}/vector_add.cso
     COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_0 -E main
             -Fo ${FSR4_SHADER_DIR}/vector_add.cso
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/vector_add.hlsl
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/vector_add.hlsl
+            ${SHADER_SRC}/vector_add.hlsl
+    DEPENDS ${SHADER_SRC}/vector_add.hlsl
     COMMENT "dxc: vector_add.hlsl -> shaders/vector_add.cso")
-add_custom_target(compile_shaders DEPENDS ${FSR4_SHADER_DIR}/vector_add.cso)
+
+# M06: INT8 WMMA probe (AMD intrinsics, cs_6_6 + native 16-bit types for the
+# packed-type headers) — one CSO per signedness mode — and the DP4A control
+# (same flags, so both probes run through the same compiler path).
+foreach(_mode i8 u8 iu8 ui8)
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/int8_wmma_${_mode}.cso
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -enable-16bit-types -E main_${_mode} -I "${SHADER_INC}"
+                -Fo ${FSR4_SHADER_DIR}/int8_wmma_${_mode}.cso
+                ${SHADER_SRC}/int8_wmma.hlsl
+        DEPENDS ${SHADER_SRC}/int8_wmma.hlsl
+        COMMENT "dxc: int8_wmma.hlsl(${_mode}) -> shaders/int8_wmma_${_mode}.cso")
+endforeach()
+add_custom_command(
+    OUTPUT ${FSR4_SHADER_DIR}/int8_dp4a.cso
+    COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -enable-16bit-types -E main -I "${SHADER_INC}"
+            -Fo ${FSR4_SHADER_DIR}/int8_dp4a.cso
+            ${SHADER_SRC}/int8_dp4a.hlsl
+    DEPENDS ${SHADER_SRC}/int8_dp4a.hlsl
+    COMMENT "dxc: int8_dp4a.hlsl -> shaders/int8_dp4a.cso")
+
+add_custom_target(compile_shaders DEPENDS
+    ${FSR4_SHADER_DIR}/vector_add.cso
+    ${FSR4_SHADER_DIR}/int8_wmma_i8.cso
+    ${FSR4_SHADER_DIR}/int8_wmma_u8.cso
+    ${FSR4_SHADER_DIR}/int8_wmma_iu8.cso
+    ${FSR4_SHADER_DIR}/int8_wmma_ui8.cso
+    ${FSR4_SHADER_DIR}/int8_dp4a.cso)
 add_dependencies(rdna3-int8 compile_shaders)
 
 enable_testing()
@@ -62,3 +97,6 @@ set_tests_properties(cli_run_unregistered PROPERTIES WILL_FAIL TRUE)
 
 # M05 hardware test: the compute harness experiment must pass on this machine.
 add_test(NAME experiment_d3d12_compute COMMAND rdna3-int8 run d3d12-compute)
+
+# M06 hardware test: INT8 WMMA probes must pass on this machine.
+add_test(NAME experiment_wmma_int8 COMMAND rdna3-int8 run wmma-int8)

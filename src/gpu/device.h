@@ -13,6 +13,7 @@
 #undef GetMessage
 
 #include <d3d12.h>
+#include <functional>
 #include <string>
 #include <wrl/client.h>
 
@@ -51,5 +52,13 @@ bool GpuSync(DeviceContext& ctx, uint32_t timeoutMs, std::string& error);
 // Drains the D3D12 info queue. Returns true when no error-severity messages
 // were stored; otherwise `errors` lists them (experiment must fail).
 bool InfoQueueClean(DeviceContext& ctx, std::string& errors);
+
+// Same verdict, but error-severity messages for which `benign` returns true
+// are counted in `benignCount` instead of failing the experiment — for
+// known, evidence-backed false positives (e.g. GPU-based validation shadow
+// passes over AMD intrinsics dummy UAVs). Everything else still fails.
+bool InfoQueueCleanWithFilter(DeviceContext& ctx,
+                              const std::function<bool(const D3D12_MESSAGE&)>& benign,
+                              size_t& benignCount, std::string& errors);
 
 } // namespace gpu

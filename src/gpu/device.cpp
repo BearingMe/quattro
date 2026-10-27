@@ -162,9 +162,14 @@ bool GpuSync(DeviceContext& ctx, uint32_t timeoutMs, std::string& error) {
     return true;
 }
 
-bool InfoQueueClean(DeviceContext& ctx, std::string& errors) {
-    if (!ctx.infoQueue)
+bool InfoQueueCleanWithFilter(DeviceContext& ctx,
+                              const std::function<bool(const D3D12_MESSAGE&)>& benign,
+                              size_t& benignCount, std::string& errors) {
+    benignCount = 0;
+    if (!ctx.infoQueue) {
+        errors.clear();
         return true; // diagnostics unavailable — surfaced at creation
+    }
     const UINT64 count = ctx.infoQueue->GetNumStoredMessages();
     bool clean = true;
     std::ostringstream out;
@@ -179,6 +184,10 @@ bool InfoQueueClean(DeviceContext& ctx, std::string& errors) {
             continue;
         if (msg->Severity == D3D12_MESSAGE_SEVERITY_ERROR ||
             msg->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) {
+            if (benign && benign(*msg)) {
+                ++benignCount;
+                continue;
+            }
             clean = false;
             out << "info queue error: "
                 << (msg->pDescription ? msg->pDescription : "(no description)") << "\n";
@@ -187,6 +196,11 @@ bool InfoQueueClean(DeviceContext& ctx, std::string& errors) {
     ctx.infoQueue->ClearStoredMessages();
     errors = out.str();
     return clean;
+}
+
+bool InfoQueueClean(DeviceContext& ctx, std::string& errors) {
+    size_t ignored = 0;
+    return InfoQueueCleanWithFilter(ctx, {}, ignored, errors);
 }
 
 } // namespace gpu

@@ -21,9 +21,9 @@ Status: starting document. Tags per [docs/CONVENTIONS.md](../../docs/CONVENTIONS
 
 ## Unknowns
 
-- [U] Whether driver 32.0.32015.7029 exposes Cooperative Vector (and at what op/format set) on gfx1101 → M05/M06 `CheckFeatureSupport` probe.
-- [U] What DXC emits (ISA) for INT8 matmul candidates on gfx1101; whether WMMA instructions are reachable through any D3D12 path here, or emulation occurs.
-- [U] INT8 WMMA latency/throughput in practice on gfx1101 (no public measurement found).
+- [x] ~~Whether driver 32.0.32015.7029 exposes Cooperative Vector (and at what op/format set) on gfx1101~~ — superseded: the AMD intrinsics route was proven end-to-end (EXP-004); CoopVec no longer needed for M06/M07 (would require newer DXC + Agility SDK; recorded as future option).
+- [x] ~~What DXC emits (ISA) for INT8 matmul candidates on gfx1101~~ — resolved: `v_wmma_i32_16x16x16_iu8` via the driver shader-analyzer extension (`IAmdExtD3DShaderAnalyzer`), signedness = `neg_lo` modifiers; DP4A control shows `dot4` and no wmma (EXP-004, `build/reports/m06/*.isa`).
+- [ ] INT8 WMMA latency/throughput in practice on gfx1101 — single-tile latency measured (WMMA 13.7–20.8 µs vs DP4A 3.2 µs per 16×16×16 tile, prologue-dominated); multi-tile throughput comparison is M07.
 
 ## Questions requiring experiments
 

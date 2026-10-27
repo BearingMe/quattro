@@ -7,7 +7,7 @@
 | Primary case study | AMD FSR 4.1 INT8 Super Resolution |
 | Initial graphics API | DirectX 12 |
 | Initial shader language | HLSL |
-| Status | Roadmap — M01–M05 complete (see per-milestone status) |
+| Status | Roadmap — M01–M06 complete (see per-milestone status) |
 
 Status markers: `☐` proposed · `◐` in progress · `☑` gate passed · `✖` closed with negative findings · `⊘` blocked
 
@@ -390,7 +390,7 @@ No neural network implementation.
 
 ### M06 — Native INT8 WMMA
 
-**Status:** ☐ proposed
+**Status:** ☑ complete (2026-10-27 — [`experiments/EXP-004-int8-wmma.md`](experiments/EXP-004-int8-wmma.md))
 
 #### Objective
 
@@ -412,24 +412,24 @@ Investigate whether the selected HLSL/DXC path can generate the required native 
 
 #### Checkpoints
 
-- [ ] C01: Document INT8 WMMA operand layouts.
-- [ ] C02: Verify available compiler paths.
-- [ ] C03: Implement a single matrix tile.
-- [ ] C04: Validate signedness and accumulation.
-- [ ] C05: Inspect generated GPU ISA.
-- [ ] C06: Verify actual WMMA instruction execution.
-- [ ] C07: Measure kernel execution time.
-- [ ] C08: Record the chosen compute path and its limitations.
+- [x] C01: Document INT8 WMMA operand layouts.
+- [x] C02: Verify available compiler paths.
+- [x] C03: Implement a single matrix tile.
+- [x] C04: Validate signedness and accumulation.
+- [x] C05: Inspect generated GPU ISA.
+- [x] C06: Verify actual WMMA instruction execution.
+- [x] C07: Measure kernel execution time.
+- [x] C08: Record the chosen compute path and its limitations.
 
 #### Validation Gate
 
-- [ ] Matrix results match a CPU INT32 reference.
-- [ ] Positive and negative operands are validated.
-- [ ] Accumulation behavior is verified.
-- [ ] Expected WMMA instructions are confirmed in generated ISA.
-- [ ] The instruction executes on gfx1101.
-- [ ] Timing measurements are reproducible.
-- [ ] Compiler and execution limitations are documented.
+- [x] Matrix results match a CPU INT32 reference.
+- [x] Positive and negative operands are validated.
+- [x] Accumulation behavior is verified.
+- [x] Expected WMMA instructions are confirmed in generated ISA.
+- [x] The instruction executes on gfx1101.
+- [x] Timing measurements are reproducible.
+- [x] Compiler and execution limitations are documented.
 
 #### Deliverables
 

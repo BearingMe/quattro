@@ -9,4 +9,8 @@ namespace experiments {
 // (0 pass, 1 experiment failure).
 int RunComputeHarness();
 
+// M06 — Native INT8 WMMA probe (AMD shader intrinsics extension) with DP4A
+// control. Returns the CLI exit code (0 pass, 1 experiment failure).
+int RunWmmaInt8();
+
 } // namespace experiments

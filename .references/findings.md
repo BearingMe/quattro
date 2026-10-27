@@ -13,10 +13,10 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 
 ## F2 — AMD reached WMMA from D3D12 HLSL via driver intrinsics extension, before SM 6.9
 
-- **Observation:** `pre_wmma.hlsl`/`post_wmma.hlsl` use `AmdWaveMatrixA/B/Accumulator<AmdExtD3DShaderIntrinsicsWaveMatrixDataFormat_{F16,FP8,F32},16,16>` + `AmdWaveMatrixMultiply` — AMD's HLSL shader-intrinsics extension.
-- **Evidence:** [S] FSR-4.0.2-reference @ `c5e34b4`, `internal/shaders/post_wmma.hlsl` L90–194, `pre_wmma.hlsl` L212–238.
-- **Confidence:** High (code exists); medium for runtime behavior (never executed by us yet).
-- **Implication:** Two candidate WMMA routes on gfx1101: (a) SM 6.9 Cooperative Vector / DX Linear Algebra (sanctioned, driver support [U]), (b) AMD extension intrinsics (what FSR4 shipped). M06 must probe both before choosing.
+- **Observation:** `pre_wmma.hlsl`/`post_wmma.hlsl` use `AmdWaveMatrixA/B/Accumulator<AmdExtD3DShaderIntrinsicsWaveMatrixDataFormat_{F16,FP8,F32},16,16>` + `AmdWaveMatrixMultiply` — AMD's HLSL shader-intrinsics extension. M06 proved the route end-to-end on gfx1101: `CheckSupport(WaveMatrix)` = S_OK on driver 32.0.32015.7029 via `amdxc64.dll`; INT8/U8 operand formats + I32 accumulator exist (`WMMA_I32_16X16X16_{I8,U8,IU8,UI8}`); DXC 1.8.2502 compiles at `cs_6_6 -enable-16bit-types`; the driver analyzer disassembles live pipelines to `v_wmma_i32_16x16x16_iu8` (Wave32, gfx11), with signedness carried by `neg_lo` operand modifiers; results bit-exact vs CPU INT32 across all four signedness modes (EXP-004).
+- **Evidence:** [S] FSR-4.0.2-reference @ `c5e34b4` — `Kits/FidelityFX/upscalers/fsr4/internal/shaders/post_wmma.hlsl` L90–194, `pre_wmma.hlsl` L212–238, `Kits/FidelityFX/api/internal/dx12/AmdExtD3D/*` headers (vendored, `src/gpu/amd/`); [M] EXP-004 + `build/reports/m06/*.isa`.
+- **Confidence:** High (executed and ISA-verified on gfx1101).
+- **Implication:** The WMMA route for M07+ is settled: D3D12/HLSL + AMD intrinsics, no HIP, no toolchain upgrade. SM 6.9 CoopVec remains unprobed (needs newer DXC + Agility SDK) — future option, not needed for the objective.
 
 ## F3 — The FSR 4 v07 model is tiny and pass-split
 
