@@ -1,0 +1,12 @@
+[submodule ".references/sources/FidelityFX-SDK"]
+	path = .references/sources/FidelityFX-SDK
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+[submodule ".references/sources/FSR-4.0.2-reference"]
+	path = .references/sources/FSR-4.0.2-reference
+	url = https://github.com/Rolaand-Jayz/FSR-4.0.2-reference
+[submodule ".references/sources/fsr4-rdna3-optimization"]
+	path = .references/sources/fsr4-rdna3-optimization
+	url = https://github.com/lhl/fsr4-rdna3-optimization
+[submodule ".references/sources/amd_matrix_instruction_calculator"]
+	path = .references/sources/amd_matrix_instruction_calculator
+	url = https://github.com/ROCm/amd_matrix_instruction_calculator
