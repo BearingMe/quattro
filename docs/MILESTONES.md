@@ -1055,8 +1055,8 @@ Do not optimize kernels during this milestone unless a correctness problem requi
 
 ### M15 — Native INT8 Performance Optimization
 
-**Status:** ◐ final regression validation in progress — performance and exact
-hardware checks recorded in
+**Status:** ✓ complete — **M15 bounded network-performance gate PASS**;
+performance and exact hardware checks recorded in
 [EXP-019](experiments/EXP-019-fsr4-native-performance.md).
 [M] Complete 14-operator neural graph: reproducible baseline **55.76–57.06 ms**
 GPU span; opt-in workspace-upload omission **34.90–35.21 ms**. Upload volume
@@ -1067,8 +1067,10 @@ conversion included) measures **49.68–51.74 ms**, also 42/42 exact boundaries.
 Failed truncating conversions and the slower GPU-zero candidate are retained.
 This is a bounded network-invocation study, not whole-SR/game frame latency or
 a proof of the hardware ceiling. Default temporal-history initialization stays
-unchanged. Final selected Release regression run is pending; no new complete
-Debug or complete Release suite verdict is implied.
+unchanged. Final selected Release regressions **21/21 PASS (790.50 s)**,
+including temporal integration. The standalone CNB, chain and graph tests were
+excluded in this run; the profiler separately passes all 42 retained layer
+controls. No new complete Debug or complete Release suite verdict is implied.
 
 #### Objective
 
@@ -1102,7 +1104,7 @@ Compare against the FP16 experiments from M07.
 - [x] C04: Measure memory and register behavior (byte counts/compiled registers; occupancy and cache counters unmeasured).
 - [x] C05: Select one measurable bottleneck.
 - [x] C06: Implement one optimization.
-- [ ] C07: Re-run correctness tests (42/42 controls passed; final selected regressions pending).
+- [x] C07: Re-run correctness tests (42/42 controls plus selected Release 21/21).
 - [x] C08: Measure the performance difference.
 - [x] C09: Compare INT8 and FP16 end-to-end costs (equivalent matrix backend within full network invocation).
 - [x] C10: Record unsuccessful optimizations.
@@ -1112,7 +1114,7 @@ Compare against the FP16 experiments from M07.
 - [x] Baseline performance is reproducible.
 - [x] Dominant bottlenecks are identified with evidence.
 - [x] Each optimization has before/after measurements.
-- [ ] Numerical correctness is preserved within documented tolerances (exact controls passed; final regressions pending).
+- [x] Numerical correctness is preserved within documented tolerances (exact controls plus selected Release 21/21).
 - [x] Memory and conversion overheads are accounted for.
 - [x] GPU execution and transfer times are distinguished.
 - [x] INT8 and FP16 are compared using equivalent workloads.

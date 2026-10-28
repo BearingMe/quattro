@@ -151,10 +151,16 @@ alignment, driver-private memory and small intrinsic/query allocations.
 
 ## Validation and reproduction
 
-Final Release regression verdict is recorded in the M15 milestone status after
-completion. The selected CTest run excludes the old standalone CNB, chain and
-graph experiments because this profiler already exercises their complete graph
-against 42 retained layer controls; it is **not a new full-suite verdict**.
+- [M] Final selected Release CTest **21/21 PASS (790.50 s)**, including temporal
+  integration, both WMMA probes, numerical/operator regressions and image metric
+  tests. The selected run excludes the old standalone CNB, chain and graph
+  experiments because this profiler already exercises their complete graph
+  against 42 retained layer controls; it is **not a new full-suite verdict**.
+- [M] **M15 bounded network-performance gate PASS**: repeated baseline and
+  before/after measurements, exact layer/output controls, accounted transfer and
+  conversion costs, equivalent-workload native FP16 comparison, and retained
+  unsuccessful candidates. Scope and unmeasured hardware-ceiling/whole-SR
+  questions remain as stated above. No new Debug suite verdict is claimed.
 
 ```powershell
 cmake --build --preset release
