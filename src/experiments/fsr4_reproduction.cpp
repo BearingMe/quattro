@@ -4,6 +4,7 @@
 #include "inference/models/fsr4_pass0.h"
 #include "inference/models/fsr4_cnb.h"
 #include "inference/models/fsr4_downscale.h"
+#include "inference/models/fsr4_fnb.h"
 #include "inference/models/fsr4_weights.h"
 #include "core/numerics.h"
 #include "gpu/compute.h"
@@ -108,10 +109,34 @@ bool ReferenceCnb(gpu::DeviceContext& ctx, uint32_t index, const std::vector<uin
     return true;
 }
 
+// Isolated execution of one shipped model pass over a synthetic scratch image.
+// `inputOffset`/`outputOffset` follow the pass's own descriptor; the caller
+// supplies the tensor it wants compared.
+bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, uint32_t index, size_t inputOffset,
+                           size_t outputOffset, uint32_t gridX, uint32_t gridY,
+                           const std::vector<uint8_t>& input,
+                           std::span<const uint8_t> initializers, size_t outputBytes,
+                           std::vector<uint8_t>& output, std::string& error);
+
 bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
                         const std::vector<uint8_t>& input,
                         std::span<const uint8_t> initializers, size_t outputBytes,
                         std::vector<uint8_t>& output, std::string& error) {
+    // Pass 3 reads scratch offset 0 and writes 8,294,400; pass 6 reads
+    // 8,294,400 and writes 12,441,600. Neither overlaps the other's extent.
+    const size_t inputOffset = index == 3 ? 0 : 8294400;
+    const size_t outputOffset = index == 3 ? 8294400 : 12441600;
+    const uint32_t gridX = index == 3 ? 8 : 4;
+    const uint32_t gridY = index == 3 ? 270 : 135;
+    return ReferenceIsolatedPass(ctx, index, inputOffset, outputOffset, gridX, gridY, input,
+                                 initializers, outputBytes, output, error);
+}
+
+bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, uint32_t index, size_t inputOffset,
+                           size_t outputOffset, uint32_t gridX, uint32_t gridY,
+                           const std::vector<uint8_t>& input,
+                           std::span<const uint8_t> initializers, size_t outputBytes,
+                           std::vector<uint8_t>& output, std::string& error) {
     gpu::ComPtr<ID3D12RootSignature> signature;
     if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
         return false;
@@ -127,12 +152,9 @@ bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
         error = "cannot create isolated reference downscale PSO";
         return false;
     }
-    // Pass 3 reads scratch offset 0 and writes 8,294,400; pass 6 reads
-    // 8,294,400 and writes 12,441,600. Neither overlaps the other's extent.
-    // t1 is the model's `InitializerBuffer`: pass 6 takes its weights from
-    // there, so a dummy binding faults the GPU instead of returning garbage.
-    const size_t inputOffset = index == 3 ? 0 : 8294400;
-    const size_t outputOffset = index == 3 ? 8294400 : 12441600;
+    // t1 is the model's `InitializerBuffer`: passes 6/7/8 take their weights
+    // from there, so a dummy binding faults the GPU instead of returning
+    // garbage. Passes whose weights are embedded constants ignore it.
     std::vector<uint8_t> scratch(20736000 + 1024, 0);
     memcpy(scratch.data() + inputOffset, input.data(), input.size());
     const std::vector<gpu::BufferInit> buffers = {
@@ -141,8 +163,8 @@ bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
     };
     gpu::BufferPass pass{};
     pass.pso = pso.Get();
-    pass.gridX = index == 3 ? 8 : 4;
-    pass.gridY = index == 3 ? 270 : 135;
+    pass.gridX = gridX;
+    pass.gridY = gridY;
     pass.srv0 = 0;
     pass.srv1 = 1;
     pass.uav0 = 2;
@@ -547,6 +569,127 @@ int RunFsr4Downscale() {
     }
     std::printf("Downscale convolutions: %s | exact named root4 intrinsic messages %zu; "
                 "tensor errors fatal\n",
+                ok ? "PASS" : "FAIL", intrinsicMessages);
+    return ok ? 0 : 1;
+}
+
+int RunFsr4Fnb() {
+    using namespace inference::fsr4;
+    std::vector<uint8_t> weights;
+    std::string error;
+    if (!LoadWeights(RepositoryRoot() / "build/reports/m12/weights.bin", weights, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::DeviceContext ctx;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !ext.waveMatrixSupported) {
+        std::fprintf(stderr, "native WMMA unavailable: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    struct ExtensionLifetime {
+        gpu::AmdExtensions& value;
+        ~ExtensionLifetime() { gpu::ReleaseAmdExtensions(value); }
+    } lifetime{ext};
+    const auto directory = RepositoryRoot() / "build/reports/m12/fnb";
+    std::filesystem::create_directories(directory);
+    const std::span<const uint8_t> initializers = std::span<const uint8_t>(weights)
+                                                     .first(kInitializerBytes);
+    bool ok = true;
+    for (uint32_t pass : {4u, 5u, 7u, 8u, 10u}) {
+        FnbGeometry shape{};
+        if (!FnbGeometryForPass(pass, shape)) {
+            std::fprintf(stderr, "no FasterNetBlock geometry for pass %u\n", pass);
+            return 1;
+        }
+        if (!SaveNumericIsa(ctx, ext, "m12ref/pass" + std::to_string(pass),
+                            directory / ("reference-pass" + std::to_string(pass) + ".isa"),
+                            false, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+        const size_t tensorBytes = size_t(shape.pixels) * shape.channels;
+        std::string passIsa;
+        for (uint32_t fixture = 0; fixture < 2; ++fixture) {
+            std::vector<uint8_t> input(tensorBytes, 0);
+            uint32_t seed = 0x5EED4F12u;
+            if (fixture == 1) {
+                for (uint8_t& value : input) {
+                    seed = seed * 1664525u + 1013904223u;
+                    value = uint8_t(seed >> 24);
+                }
+            }
+            std::vector<uint8_t> output, repeated, reference;
+            std::string repeatedIsa;
+            const bool ownOk =
+                RunFasterNetBlock(ctx, ext, pass, input, weights, output, passIsa, error);
+            const bool repeatOk = ownOk &&
+                RunFasterNetBlock(ctx, ext, pass, input, weights, repeated, repeatedIsa, error);
+            const bool referenceOk = repeatOk && ReferenceIsolatedPass(
+                ctx, pass, shape.inputOffset, shape.outputOffset, shape.gridX, shape.gridY,
+                input, initializers, tensorBytes, reference, error);
+            if (!ownOk || !repeatOk || !referenceOk) {
+                std::fprintf(stderr, "fnb pass %u fixture %u: %s\n", pass, fixture, error.c_str());
+                return 1;
+            }
+            if (const char* dump = std::getenv("M12_DUMP"); dump && *dump == '1') {
+                const std::string stem =
+                    "pass" + std::to_string(pass) + "-fixture" + std::to_string(fixture);
+                for (const auto& [suffix, data] :
+                     {std::pair<const char*, const std::vector<uint8_t>*>{"-input.bin", &input},
+                      {"-own.bin", &output},
+                      {"-ref.bin", &reference}}) {
+                    std::ofstream file(directory / (stem + suffix), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(data->data()),
+                               std::streamsize(data->size()));
+                    if (!file)
+                        return 1;
+                }
+            }
+            size_t different = 0;
+            int maxDelta = 0;
+            for (size_t i = 0; i < output.size(); ++i) {
+                if (output[i] != reference[i]) {
+                    ++different;
+                    maxDelta = std::max(
+                        maxDelta, std::abs(int(int8_t(output[i])) - int(int8_t(reference[i]))));
+                }
+            }
+            const bool deterministic = output == repeated;
+            const bool native = passIsa.find("v_wmma_i32_16x16x16_iu8") != std::string::npos;
+            std::printf("FasterNet pass%u fixture%u: %zu/%zu mismatches | max delta %d | "
+                        "deterministic %s | native WMMA %s\n",
+                        pass, fixture, different, output.size(), maxDelta,
+                        deterministic ? "yes" : "NO", native ? "yes" : "NO");
+            ok = ok && different == 0 && deterministic;
+            for (size_t i = 0, shown = 0; i < output.size() && shown < 8; ++i) {
+                if (output[i] == reference[i])
+                    continue;
+                const size_t pixel = i / shape.channels;
+                std::printf("  mismatch pixel(%zu,%zu) c%zu: own %d reference %d\n",
+                            pixel % shape.width, pixel / shape.width, i % shape.channels,
+                            int(int8_t(output[i])), int(int8_t(reference[i])));
+                ++shown;
+            }
+        }
+        std::ofstream file(directory / ("pass" + std::to_string(pass) + ".isa"), std::ios::binary);
+        file << passIsa;
+        if (!file)
+            return 1;
+    }
+    std::string queueErrors;
+    size_t intrinsicMessages = 0;
+    if (!gpu::InfoQueueCleanWithFilter(ctx, gpu::IsBufferPassWmmaDiagnostic, intrinsicMessages,
+                                       queueErrors)) {
+        std::fprintf(stderr, "%s\n", queueErrors.c_str());
+        return 1;
+    }
+    std::printf("FasterNetBlocks: %s | exact named root4 intrinsic messages %zu\n",
                 ok ? "PASS" : "FAIL", intrinsicMessages);
     return ok ? 0 : 1;
 }

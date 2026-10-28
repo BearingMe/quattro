@@ -405,11 +405,29 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
             list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}${_step}.cso)
         endforeach()
     endforeach()
+    # FasterNetBlock passes 4/5/7/8/10: one fused DP4A kernel per pixel, as in
+    # the shipped (non-WMMA) operator. Constants come from the generated header.
+    foreach(_fnb_pass 4 5 7 8 10)
+        add_custom_command(
+            OUTPUT ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m12
+            COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E main -O3
+                    -enable-16bit-types -HV 2021 -I "${M12_DATA_DIR}" -I "${SHADER_SRC}"
+                    -D FNB_PASS=${_fnb_pass}
+                    -Fo ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso
+                    ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_fnb.hlsl
+            DEPENDS ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_fnb.hlsl
+                    ${M12_GENERATED}
+            COMMENT "dxc: our FasterNetBlock pass${_fnb_pass}"
+            VERBATIM)
+        list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso)
+    endforeach()
     target_sources(rdna3-int8 PRIVATE
         src/inference/models/fsr4_weights.cpp
         src/inference/models/fsr4_pass0.cpp
         src/inference/models/fsr4_cnb.cpp
         src/inference/models/fsr4_downscale.cpp
+        src/inference/models/fsr4_fnb.cpp
         src/experiments/fsr4_reproduction.cpp
         ${M12_DATA_DIR}/weights.generated.h)
     target_include_directories(rdna3-int8 PRIVATE ${M12_DATA_DIR})
@@ -494,6 +512,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     add_test(NAME experiment_fsr4_pass0 COMMAND rdna3-int8 run fsr4-pass0)
     add_test(NAME experiment_fsr4_cnb COMMAND rdna3-int8 run fsr4-cnb)
     add_test(NAME experiment_fsr4_downscale COMMAND rdna3-int8 run fsr4-downscale)
+    add_test(NAME experiment_fsr4_fnb COMMAND rdna3-int8 run fsr4-fnb)
     add_test(NAME m12_model_packing COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/scripts/m12_test_pack.py)
     add_test(NAME m12_tensor_metadata COMMAND ${Python3_EXECUTABLE} -B

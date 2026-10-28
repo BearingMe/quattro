@@ -184,6 +184,26 @@ def main() -> None:
             for group in range(2):
                 folded = f32(product / f32(parameters[index][group]))
                 shader.append(f"#define M12_P{index}_EPI_SCALE{group} {folded:.17e}f")
+        # FasterNetBlock's first two requantizations fold the output-scale
+        # reciprocal into both the combined scale and the bias; the shipped ISA
+        # shows a single `v_fmaak_f32` and no trailing multiply. Emit the folded
+        # scales (all steps rounded to binary32):
+        #   EPI0 = fl(fl(quantScale0 * weights0Scale) / quantScale1)
+        #   EPI1 = fl(fl(quantScale1 * weights1Scale) / activationScaleFactor)
+        if (graph["passes"][index]["operator"] == "FasterNetBlock"
+                and len(parameters[index]) >= 3 and len(records_of_pass) >= 6):
+            s0, s1, act = (f32(parameters[index][k]) for k in range(3))
+            # The driver multiplies by the reciprocal rather than dividing, so
+            # the folded constants are fl(fl(a*b) * fl(1/c)).
+            folded0 = f32(f32(s0 * f32(records_of_pass[0]["scale"])) * f32(1.0 / s1))
+            folded1 = f32(f32(s1 * f32(records_of_pass[2]["scale"])) * f32(1.0 / act))
+            shader.append(f"#define M12_P{index}_EPI0 {folded0:.17e}f")
+            shader.append(f"#define M12_P{index}_EPI1 {folded1:.17e}f")
+            # The residual stage keeps an explicit trailing multiply by the
+            # output-scale reciprocal, so only the weight*activation product is
+            # folded into the FMA operand.
+            folded2 = f32(f32(records_of_pass[4]["scale"]) * act)
+            shader.append(f"#define M12_P{index}_EPI2 {folded2:.17e}f")
         for ordinal, record in enumerate(records_of_pass):
             prefix = f"M12_P{index}_W{ordinal}"
             shader.append(f"#define {prefix}_OFFSET {record['offset']}u")
