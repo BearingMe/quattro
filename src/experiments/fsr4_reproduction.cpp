@@ -3,6 +3,7 @@
 #include "experiments.h"
 #include "inference/models/fsr4_pass0.h"
 #include "inference/models/fsr4_cnb.h"
+#include "inference/models/fsr4_downscale.h"
 #include "inference/models/fsr4_weights.h"
 #include "core/numerics.h"
 #include "gpu/compute.h"
@@ -17,6 +18,11 @@
 
 namespace experiments {
 namespace {
+
+// The checked weight payload starts with the pinned initializer buffer
+// verbatim; scripts/m12_pack_model.py appends the embedded arrays after it.
+// Reference passes that read AMD's `InitializerBuffer` bind this prefix.
+constexpr size_t kInitializerBytes = 89216;
 
 std::filesystem::path RepositoryRoot() {
     wchar_t path[MAX_PATH]{};
@@ -99,6 +105,54 @@ bool ReferenceCnb(gpu::DeviceContext& ctx, uint32_t index, const std::vector<uin
                               3, outputOffset + input.size(), raw, error))
         return false;
     output.assign(raw.begin() + outputOffset, raw.end());
+    return true;
+}
+
+bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
+                        const std::vector<uint8_t>& input,
+                        std::span<const uint8_t> initializers, size_t outputBytes,
+                        std::vector<uint8_t>& output, std::string& error) {
+    gpu::ComPtr<ID3D12RootSignature> signature;
+    if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
+        return false;
+    std::vector<uint8_t> cso;
+    const std::string name = "m12ref/pass" + std::to_string(index);
+    if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
+        return false;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = signature.Get();
+    desc.CS = {cso.data(), cso.size()};
+    gpu::ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(ctx.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
+        error = "cannot create isolated reference downscale PSO";
+        return false;
+    }
+    // Pass 3 reads scratch offset 0 and writes 8,294,400; pass 6 reads
+    // 8,294,400 and writes 12,441,600. Neither overlaps the other's extent.
+    // t1 is the model's `InitializerBuffer`: pass 6 takes its weights from
+    // there, so a dummy binding faults the GPU instead of returning garbage.
+    const size_t inputOffset = index == 3 ? 0 : 8294400;
+    const size_t outputOffset = index == 3 ? 8294400 : 12441600;
+    std::vector<uint8_t> scratch(20736000 + 1024, 0);
+    memcpy(scratch.data() + inputOffset, input.data(), input.size());
+    const std::vector<gpu::BufferInit> buffers = {
+        {4, nullptr}, {initializers.size(), initializers.data()}, {4, nullptr},
+        {scratch.size(), scratch.data()},
+    };
+    gpu::BufferPass pass{};
+    pass.pso = pso.Get();
+    pass.gridX = index == 3 ? 8 : 4;
+    pass.gridY = index == 3 ? 270 : 135;
+    pass.srv0 = 0;
+    pass.srv1 = 1;
+    pass.uav0 = 2;
+    pass.uav1 = 3;
+    std::vector<std::vector<uint8_t>> snapshots;
+    std::vector<uint8_t> raw;
+    if (!gpu::RunBufferPasses(ctx, signature, buffers, {pass}, 3, {false}, snapshots,
+                              3, outputOffset + outputBytes, raw, error))
+        return false;
+    output.assign(raw.begin() + outputOffset, raw.begin() + outputOffset + outputBytes);
     return true;
 }
 
@@ -363,6 +417,136 @@ int RunFsr4Cnb() {
         return 1;
     }
     std::printf("ConvNextBlocks: %s | exact named root4 intrinsic messages %zu; tensor errors fatal\n",
+                ok ? "PASS" : "FAIL", intrinsicMessages);
+    return ok ? 0 : 1;
+}
+
+int RunFsr4Downscale() {
+    using namespace inference::fsr4;
+    std::vector<uint8_t> weights;
+    std::string error;
+    if (!LoadWeights(RepositoryRoot() / "build/reports/m12/weights.bin", weights, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::DeviceContext ctx;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !ext.waveMatrixSupported) {
+        std::fprintf(stderr, "native WMMA unavailable: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    struct ExtensionLifetime {
+        gpu::AmdExtensions& value;
+        ~ExtensionLifetime() { gpu::ReleaseAmdExtensions(value); }
+    } lifetime{ext};
+    const auto directory = RepositoryRoot() / "build/reports/m12/downscale";
+    std::filesystem::create_directories(directory);
+    bool ok = true;
+    for (uint32_t pass : {3u, 6u}) {
+        DownscaleGeometry shape{};
+        if (!DownscaleGeometryForPass(pass, shape)) {
+            std::fprintf(stderr, "no downscale geometry for pass %u\n", pass);
+            return 1;
+        }
+        // The shipped pass's own ISA is the numeric-oracle evidence: it shows
+        // the exact float sequence its requantization epilogue lowers to.
+        if (!SaveNumericIsa(ctx, ext, "m12ref/pass" + std::to_string(pass),
+                            directory / ("reference-pass" + std::to_string(pass) + ".isa"),
+                            false, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+        const size_t inputBytes = size_t(shape.inputPixels) * shape.inputChannels;
+        const size_t outputBytes = size_t(shape.pixels) * shape.features;
+        std::string passIsa;
+        for (uint32_t fixture = 0; fixture < 2; ++fixture) {
+            // Fixture 1 covers the full signed INT8 range, fixture 0 the
+            // all-zero case; both are fed byte-identically to our pass and to
+            // the isolated shipped pass.
+            std::vector<uint8_t> input(inputBytes, 0);
+            uint32_t seed = 0x5EED4F12u;
+            if (fixture == 1) {
+                for (uint8_t& value : input) {
+                    seed = seed * 1664525u + 1013904223u;
+                    value = uint8_t(seed >> 24);
+                }
+            }
+            std::vector<uint8_t> output, repeated, reference;
+            std::string repeatedIsa;
+            const std::span<const uint8_t> initializers = std::span<const uint8_t>(weights)
+                                                             .first(kInitializerBytes);
+            const bool ownOk =
+                RunDownscaleConvolution(ctx, ext, pass, input, weights, output, passIsa, error);
+            const bool repeatOk = ownOk &&
+                RunDownscaleConvolution(ctx, ext, pass, input, weights, repeated, repeatedIsa, error);
+            const bool referenceOk = repeatOk &&
+                ReferenceDownscale(ctx, pass, input, initializers, outputBytes, reference, error);
+            if (!ownOk || !repeatOk || !referenceOk) {
+                std::fprintf(stderr, "downscale pass %u fixture %u: %s\n", pass, fixture,
+                             error.c_str());
+                return 1;
+            }
+            // Optional captures (M12_DUMP=1), same convention as the reference
+            // oracle: explicit dumps only, always under build/reports/m12/.
+            if (const char* dump = std::getenv("M12_DUMP"); dump && *dump == '1') {
+                const std::string stem =
+                    "pass" + std::to_string(pass) + "-fixture" + std::to_string(fixture);
+                for (const auto& [suffix, data] :
+                     {std::pair<const char*, const std::vector<uint8_t>*>{"-input.bin", &input},
+                      {"-own.bin", &output},
+                      {"-ref.bin", &reference}}) {
+                    std::ofstream file(directory / (stem + suffix), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(data->data()),
+                               std::streamsize(data->size()));
+                    if (!file)
+                        return 1;
+                }
+            }
+            size_t different = 0;
+            int maxDelta = 0;
+            for (size_t i = 0; i < output.size(); ++i) {
+                if (output[i] != reference[i]) {
+                    ++different;
+                    maxDelta = std::max(
+                        maxDelta, std::abs(int(int8_t(output[i])) - int(int8_t(reference[i]))));
+                }
+            }
+            const bool deterministic = output == repeated;
+            const bool native = passIsa.find("v_wmma_i32_16x16x16_iu8") != std::string::npos;
+            std::printf("Downscale pass%u fixture%u: %zu/%zu mismatches | max delta %d | "
+                        "deterministic %s | native WMMA %s\n",
+                        pass, fixture, different, output.size(), maxDelta,
+                        deterministic ? "yes" : "NO", native ? "yes" : "NO");
+            ok = ok && different == 0 && deterministic && native;
+            for (size_t i = 0, shown = 0; i < output.size() && shown < 12; ++i) {
+                if (output[i] == reference[i])
+                    continue;
+                const size_t pixel = i / shape.features;
+                std::printf("  mismatch pixel(%zu,%zu) c%zu: own %d reference %d\n",
+                            pixel % shape.width, pixel / shape.width, i % shape.features,
+                            int(int8_t(output[i])), int(int8_t(reference[i])));
+                ++shown;
+            }
+        }
+        std::ofstream file(directory / ("pass" + std::to_string(pass) + ".isa"), std::ios::binary);
+        file << passIsa;
+        if (!file)
+            return 1;
+    }
+    std::string queueErrors;
+    size_t intrinsicMessages = 0;
+    if (!gpu::InfoQueueCleanWithFilter(ctx, gpu::IsBufferPassWmmaDiagnostic, intrinsicMessages,
+                                       queueErrors)) {
+        std::fprintf(stderr, "%s\n", queueErrors.c_str());
+        return 1;
+    }
+    std::printf("Downscale convolutions: %s | exact named root4 intrinsic messages %zu; "
+                "tensor errors fatal\n",
                 ok ? "PASS" : "FAIL", intrinsicMessages);
     return ok ? 0 : 1;
 }

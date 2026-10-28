@@ -99,8 +99,9 @@ invocation. No persistent-frame/runtime-equivalence claim is made.
 
 ## Not yet done (M12 gate not met)
 
-- C04: remaining FasterNetBlock, FNB_CT2D_ADD, CNB_CT2D and quantized downscale
-  convolutions. Independent pass 0 and ConvNextBlocks are covered by EXP-011.
+- C04: remaining FasterNetBlock, FNB_CT2D_ADD and CNB_CT2D. Independent passes
+  0, 1, 2 and 12 are covered by EXP-011; passes 3 and 6 by
+  [EXP-012](EXP-012-fsr4-downscale.md).
 - C05 is now covered by [EXP-011](EXP-011-fsr4-reproduction-operators.md):
   checked full-payload loading and 78 weight descriptors. The original graph
   extractor is inventory-only; the separate packer extracts the actual data.

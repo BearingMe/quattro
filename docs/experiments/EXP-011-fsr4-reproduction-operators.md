@@ -87,8 +87,10 @@ python -B scripts/m12_validate_graph.py
 
 ## Open work
 
-- Downscale quantized convolutions (passes 3/6).
 - FasterNetBlock (passes 4/5/7/8/10).
 - FNB_CT2D_ADD (passes 9/11), predicated stores and skip arithmetic.
 - CNB_CT2D (pass 13), including its intermediate FP16 rounding boundary.
 - Full GPU-resident graph execution and per-pass/end-to-end comparison (C07–C09).
+
+Downscale convolutions (passes 3/6) are covered by
+[EXP-012](EXP-012-fsr4-downscale.md).

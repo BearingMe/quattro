@@ -359,10 +359,57 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
             endforeach()
         endforeach()
     endforeach()
+
+    # Passes 3 and 6: quantized stride-2 downscale convolution. Three fixed
+    # dispatches per pass (im2col/weight pack -> native WMMA GEMM -> two-group
+    # requantization), all shapes baked per CSO like the reference codegen.
+    foreach(_ds_pass 3 6)
+        if(_ds_pass EQUAL 3)
+            set(_ds_pixels 129600)
+            set(_ds_features 32)
+            set(_ds_reduction 64)
+        else()
+            set(_ds_pixels 32400)
+            set(_ds_features 64)
+            set(_ds_reduction 128)
+        endif()
+        math(EXPR _ds_kt "${_ds_reduction}/16")
+        math(EXPR _ds_b "${_ds_pixels}*${_ds_reduction}")
+        math(EXPR _ds_zero "${_ds_b}+${_ds_reduction}*${_ds_features}")
+        add_custom_command(
+            OUTPUT ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}raw.cso
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m12
+            COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E gemm_raw -O3
+                    -enable-16bit-types -HV 2021 -I "${SHADER_INC}"
+                    -D GEMM_K_TILES=${_ds_kt} -D GEMM_M=${_ds_pixels} -D GEMM_N=${_ds_features}
+                    -D GEMM_B_OFF=${_ds_b} -D GEMM_ZERO_OFF=${_ds_zero}
+                    -Fo ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}raw.cso ${SHADER_SRC}/gemm_i8.hlsl
+            DEPENDS ${SHADER_SRC}/gemm_i8.hlsl
+                    ${SHADER_INC}/AmdExtD3D/AmdExtD3DShaderIntrinsicsMatrixOps.hlsl
+            COMMENT "dxc: native WMMA downscale convolution pass ${_ds_pass}"
+            VERBATIM)
+        list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}raw.cso)
+        foreach(_step pack post)
+            add_custom_command(
+                OUTPUT ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}${_step}.cso
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m12
+                COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E ${_step} -O3
+                        -enable-16bit-types -HV 2021 -I "${M12_DATA_DIR}" -I "${SHADER_SRC}"
+                        -D DS_PASS=${_ds_pass}
+                        -Fo ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}${_step}.cso
+                        ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_downscale.hlsl
+                DEPENDS ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_downscale.hlsl
+                        ${SHADER_SRC}/conv_i8.hlsli ${M12_GENERATED}
+                COMMENT "dxc: our downscale pass${_ds_pass} ${_step}"
+                VERBATIM)
+            list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/ds${_ds_pass}${_step}.cso)
+        endforeach()
+    endforeach()
     target_sources(rdna3-int8 PRIVATE
         src/inference/models/fsr4_weights.cpp
         src/inference/models/fsr4_pass0.cpp
         src/inference/models/fsr4_cnb.cpp
+        src/inference/models/fsr4_downscale.cpp
         src/experiments/fsr4_reproduction.cpp
         ${M12_DATA_DIR}/weights.generated.h)
     target_include_directories(rdna3-int8 PRIVATE ${M12_DATA_DIR})
@@ -446,6 +493,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     add_test(NAME experiment_fsr4_weights COMMAND rdna3-int8 run fsr4-weights)
     add_test(NAME experiment_fsr4_pass0 COMMAND rdna3-int8 run fsr4-pass0)
     add_test(NAME experiment_fsr4_cnb COMMAND rdna3-int8 run fsr4-cnb)
+    add_test(NAME experiment_fsr4_downscale COMMAND rdna3-int8 run fsr4-downscale)
     add_test(NAME m12_model_packing COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/scripts/m12_test_pack.py)
     add_test(NAME m12_tensor_metadata COMMAND ${Python3_EXECUTABLE} -B

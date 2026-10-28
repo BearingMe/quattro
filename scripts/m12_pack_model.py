@@ -28,6 +28,11 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def f32(value: float) -> float:
+    """Round to binary32, the precision HLSL float arithmetic uses."""
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
 def fnv1a(data: bytes) -> int:
     value = 14695981039346656037
     for byte in data:
@@ -163,7 +168,23 @@ def main() -> None:
                              ("OUTPUT", graph["passes"][index]["tensors"][-1])):
             if "quantizationScale" in tensor:
                 shader.append(f"#define M12_P{index}_{name}_SCALE {tensor['quantizationScale']:.17e}f")
-        for ordinal, record in enumerate(r for r in records if r["pass"] == index):
+        records_of_pass = [r for r in records if r["pass"] == index]
+        # The quantized downscale epilogue folds the output-scale reciprocal
+        # into the weight*input scale and into the bias; the shipped ISA shows
+        # `v_fmaak_f32 sGroup, acc, bias*rcp` with no trailing multiply. Emit
+        # the two folded group scales so the reproduction can bake exactly the
+        # bits the reference code generation produced. Derivation (all steps
+        # rounded to binary32, matching float arithmetic):
+        #   fl(fl(weightScale * inputScale) / quantFactor)
+        if (graph["passes"][index]["operator"] == "FusedConv2D_k2s2b_QuantizedOutput"
+                and len(parameters[index]) >= 2 and records_of_pass):
+            input_scale = f32(graph["passes"][index]["tensors"][0]["quantizationScale"])
+            weight_scale = f32(records_of_pass[0]["scale"])
+            product = f32(weight_scale * input_scale)
+            for group in range(2):
+                folded = f32(product / f32(parameters[index][group]))
+                shader.append(f"#define M12_P{index}_EPI_SCALE{group} {folded:.17e}f")
+        for ordinal, record in enumerate(records_of_pass):
             prefix = f"M12_P{index}_W{ordinal}"
             shader.append(f"#define {prefix}_OFFSET {record['offset']}u")
             shader.append(f"#define {prefix}_SCALE {record['scale']:.17e}f")

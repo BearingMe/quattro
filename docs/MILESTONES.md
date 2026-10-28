@@ -751,12 +751,13 @@ No FSR 4-specific model implementation yet.
 ### M12 — FSR 4 Model Reproduction
 
 **Status:** ◐ in progress — C01–C03 and C05 have evidence. Independent passes
-0/1/2/12 execute; C04 and C06–C09 remain incomplete. The gate is **UNVERIFIED**:
-the full reproduction graph does not execute yet. See
+0/1/2/3/6/12 execute; C04 and C06–C09 remain incomplete. The gate is
+**UNVERIFIED**: the full reproduction graph does not execute yet. See
 [`experiments/EXP-010-fsr4-model-graph.md`](experiments/EXP-010-fsr4-model-graph.md)
 and [`findings/2026-10-27-fsr4-v07-graph.md`](findings/2026-10-27-fsr4-v07-graph.md).
 Operator/weight evidence:
-[`experiments/EXP-011-fsr4-reproduction-operators.md`](experiments/EXP-011-fsr4-reproduction-operators.md).
+[`experiments/EXP-011-fsr4-reproduction-operators.md`](experiments/EXP-011-fsr4-reproduction-operators.md)
+and [`experiments/EXP-012-fsr4-downscale.md`](experiments/EXP-012-fsr4-downscale.md).
 
 Selected reference: **FSR 4.0.2, model `fsr4_model_v07_i8_quality`, 1080p**
 (`FSR-4.0.2-reference` @ `c5e34b4`) — not FSR 4.1, whose graph is closed.
@@ -783,6 +784,16 @@ PASS (281.94 s)**, with verbose exact-comparison/repeat evidence and separate
 artifact-identity manifests under `build/reports/m12/`. Adversarial review
 accepted the partial checkpoint conditional on these results. **M12 gate:
 UNVERIFIED**, not PASS; ten model passes and full-graph integration remain.
+
+[M] Downscale family (2026-10-28, EXP-012): our own GPU pipeline for passes 3
+and 6 is byte-exact against the isolated shipped passes on zero and full-range
+INT8 fixtures — **0/4,147,200** and **0/2,073,600** differing bytes, max delta
+0, deterministic, native `v_wmma_i32_16x16x16_iu8` confirmed. Exactness required
+the reference's *compiler-folded* requantization form, derived from its ISA, not
+its source expression
+([finding](findings/2026-10-28-fsr4-quantized-output-epilogue.md)). Debug CTest
+**19/19 PASS (369.88 s)** and Release **19/19 PASS (371.28 s)**. Remaining C04
+families: FasterNetBlock (4/5/7/8/10), FNB_CT2D_ADD (9/11), CNB_CT2D (13).
 
 #### Objective
 

@@ -38,6 +38,7 @@ const std::vector<Experiment>& experiments() {
         {"fsr4-weights", "M12 checked model weight loading and corruption rejection", &experiments::RunFsr4Weights},
         {"fsr4-pass0", "M12 our input convolution vs reference (1/14 passes, not the gate)", &experiments::RunFsr4Pass0},
         {"fsr4-cnb", "M12 our native WMMA ConvNextBlocks vs isolated reference passes", &experiments::RunFsr4Cnb},
+        {"fsr4-downscale", "M12 our quantized downscale convolutions (passes 3/6) vs isolated reference passes", &experiments::RunFsr4Downscale},
 #endif
     };
     return kExperiments;

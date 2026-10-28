@@ -49,5 +49,6 @@ int RunFsr4Oracle();
 int RunFsr4Weights();
 int RunFsr4Pass0();
 int RunFsr4Cnb();
+int RunFsr4Downscale();
 
 } // namespace experiments

@@ -295,9 +295,12 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         return false;
     }
     if (const HRESULT removed = ctx.device->GetDeviceRemovedReason(); FAILED(removed)) {
+        std::string queueErrors;
+        InfoQueueClean(ctx, queueErrors);
         std::ostringstream out;
         out << "device removed during buffer passes (GetDeviceRemovedReason=0x"
-            << std::hex << uint32_t(removed) << ")";
+            << std::hex << uint32_t(removed) << ")"
+            << (queueErrors.empty() ? std::string() : "; " + queueErrors);
         error = out.str();
         return false;
     }
