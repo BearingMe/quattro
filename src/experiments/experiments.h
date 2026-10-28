@@ -51,6 +51,7 @@ int RunFsr4Pass0();
 int RunFsr4Cnb();
 int RunFsr4Chain();
 int RunFsr4Graph();
+int RunFsr4Temporal();
 int RunFsr4Downscale();
 int RunFsr4Fnb();
 

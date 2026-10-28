@@ -28,7 +28,7 @@ namespace {
 
 constexpr uint32_t kWidth = 1920;
 constexpr uint32_t kHeight = 1080;
-constexpr uint32_t kInputChannels = 7;       // color 3 + RFM 4
+constexpr uint32_t kInputChannels = 7;       // current/history Y, chroma distance, RFM 4
 constexpr uint32_t kInputStorageChannels = 8; // padded to a whole dword
 // Pass0's rounded grid can read through input row 1083; pass13 can write
 // through output row 1087 (68*16=1088). These are harness safety allocations,

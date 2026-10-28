@@ -40,6 +40,7 @@ const std::vector<Experiment>& experiments() {
         {"fsr4-cnb", "M12 our native WMMA ConvNextBlocks vs isolated reference passes", &experiments::RunFsr4Cnb},
         {"fsr4-chain", "M12 GPU-resident passes 0 -> 1 vs shipped reference chain (not full graph)", &experiments::RunFsr4Chain},
         {"fsr4-graph", "M12 GPU-resident 14-pass reproduction vs predication control and shipped graph", &experiments::RunFsr4Graph},
+        {"fsr4-temporal", "M13 experimental 720p -> 1080p temporal pipeline, explicit supported permutation", &experiments::RunFsr4Temporal},
         {"fsr4-downscale", "M12 our quantized downscale convolutions (passes 3/6) vs isolated reference passes", &experiments::RunFsr4Downscale},
         {"fsr4-fnb", "M12 our FasterNetBlocks (passes 4/5/7/8/10) vs isolated reference passes", &experiments::RunFsr4Fnb},
 #endif

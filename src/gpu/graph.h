@@ -71,7 +71,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
                      size_t snapshotBuffer, const std::vector<bool>& snapshotAfter,
                      std::vector<std::vector<uint8_t>>& snapshots,
                      size_t outputBuffer, size_t outputBytes,
-                     std::vector<uint8_t>& output, std::string& error,
-                     bool nativeWmma = false);
+                      std::vector<uint8_t>& output, std::string& error,
+                      bool nativeWmma = false,
+                      std::vector<double>* gpuMilliseconds = nullptr);
 
 } // namespace gpu

@@ -75,7 +75,10 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
                      size_t snapshotBuffer, const std::vector<bool>& snapshotAfter,
                      std::vector<std::vector<uint8_t>>& snapshots,
                      size_t outputBuffer, size_t outputBytes,
-                     std::vector<uint8_t>& output, std::string& error, bool nativeWmma) {
+                      std::vector<uint8_t>& output, std::string& error, bool nativeWmma,
+                      std::vector<double>* gpuMilliseconds) {
+    if (gpuMilliseconds)
+        gpuMilliseconds->clear();
     if (!rootSignature || buffers.empty() || passes.empty() ||
         snapshotBuffer >= buffers.size() || outputBuffer >= buffers.size() ||
         buffers[outputBuffer].bytes < outputBytes ||
@@ -130,6 +133,24 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     const D3D12_HEAP_PROPERTIES defaultHeap = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
     const D3D12_HEAP_PROPERTIES uploadHeap = HeapProps(D3D12_HEAP_TYPE_UPLOAD);
     const D3D12_HEAP_PROPERTIES readbackHeap = HeapProps(D3D12_HEAP_TYPE_READBACK);
+    ComPtr<ID3D12QueryHeap> timestamps;
+    ComPtr<ID3D12Resource> timestampReadback;
+    if (gpuMilliseconds) {
+        if (passes.size() > UINT32_MAX / 2 || ctx.timestampFrequency == 0) {
+            error = "invalid timestamp count/frequency";
+            return false;
+        }
+        D3D12_QUERY_HEAP_DESC queryDesc{};
+        queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        queryDesc.Count = uint32_t(passes.size() * 2);
+        const auto desc = BufferDesc(passes.size() * 2 * sizeof(uint64_t), D3D12_RESOURCE_FLAG_NONE);
+        if (FAILED(ctx.device->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&timestamps))) ||
+            FAILED(ctx.device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&timestampReadback)))) {
+            error = "cannot create buffer-pass timestamps";
+            return false;
+        }
+    }
 
     ComPtr<ID3D12Resource> intrinsicDummy;
     if (nativeWmma) {
@@ -227,6 +248,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     size_t snapIndex = 0;
     for (size_t i = 0; i < passes.size(); ++i) {
         const BufferPass& p = passes[i];
+        if (timestamps)
+            list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(i * 2));
         for (const BufferCopy& copy : p.copiesBefore) {
             D3D12_RESOURCE_BARRIER barriers[] = {
                 TransitionBarrier(buf[copy.source].Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -263,6 +286,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         list->SetComputeRootShaderResourceView(2, buf[p.srv1]->GetGPUVirtualAddress());
         list->SetComputeRootUnorderedAccessView(3, buf[p.uav1]->GetGPUVirtualAddress());
         list->Dispatch(p.gridX, p.gridY, p.gridZ);
+        if (timestamps)
+            list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(i * 2 + 1));
 
         D3D12_RESOURCE_BARRIER uavOrder{};
         uavOrder.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -314,6 +339,9 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         list->ResourceBarrier(1, &toCommon);
     }
 
+    if (timestamps)
+        list->ResolveQueryData(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
+                              uint32_t(passes.size() * 2), timestampReadback.Get(), 0);
     if (FAILED(list->Close())) {
         error = "Close buffer-pass command list failed";
         return false;
@@ -342,6 +370,18 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         return false;
     }
 
+    if (timestamps) {
+        void* raw = nullptr;
+        if (FAILED(timestampReadback->Map(0, nullptr, &raw))) {
+            error = "timestamp readback Map failed";
+            return false;
+        }
+        const auto* ticks = static_cast<const uint64_t*>(raw);
+        for (size_t i = 0; i < passes.size(); ++i)
+            gpuMilliseconds->push_back(double(ticks[i * 2 + 1] - ticks[i * 2]) *
+                                        1000.0 / double(ctx.timestampFrequency));
+        timestampReadback->Unmap(0, nullptr);
+    }
     snapshots.assign(snapshotCount, {});
     for (size_t i = 0; i < snapshotCount; ++i) {
         void* raw = nullptr;

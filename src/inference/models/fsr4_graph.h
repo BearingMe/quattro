@@ -40,6 +40,10 @@ bool AppendFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& exten
 bool AppendCnbCt2d(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
                    DispatchPlan& plan, size_t input, size_t weights, size_t& output,
                    std::string& error);
+bool AppendModelGraph(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                       DispatchPlan& plan, size_t input, size_t weights, uint32_t lastPass,
+                       size_t& output, std::string& error,
+                       std::vector<size_t>* boundaries = nullptr);
 
 // Fixed pinned graph prefix, inclusive lastPass (0..13). Separate live tensors;
 // optional logical snapshots at every model boundary, not every micro-dispatch.

@@ -436,7 +436,31 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
             VERBATIM)
         list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso)
     endforeach()
+    # M13: explicit linear/manual-exposure/LR-MV/inverted-depth/no-RCAS adapter.
+    set(M13_COLOR_INCLUDE "${FSR4_REFERENCE_INCLUDE}/../include/gpu/fsr4")
+    foreach(_stage pre post)
+        if(_stage STREQUAL "pre")
+            set(_is_pre 1)
+        else()
+            set(_is_pre 0)
+        endif()
+        add_custom_command(
+            OUTPUT ${FSR4_SHADER_DIR}/m13/${_stage}.cso
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m13
+            COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E main -O3
+                    -enable-16bit-types -HV 2021 -D TEMPORAL_PRE=${_is_pre}
+                    -I "${M13_COLOR_INCLUDE}"
+                    -Fo ${FSR4_SHADER_DIR}/m13/${_stage}.cso
+                    ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_temporal.hlsl
+            DEPENDS ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_temporal.hlsl
+                    ${M13_COLOR_INCLUDE}/ffx_fsr4_gpu_colorspace_common.h
+            COMMENT "dxc: M13 temporal ${_stage}"
+            VERBATIM)
+        list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m13/${_stage}.cso)
+    endforeach()
     target_sources(rdna3-int8 PRIVATE
+        src/inference/models/fsr4_temporal.cpp
+        src/experiments/fsr4_temporal.cpp
         src/inference/models/fsr4_weights.cpp
         src/inference/models/fsr4_pass0.cpp
         src/inference/models/fsr4_graph.cpp
@@ -529,6 +553,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     add_test(NAME experiment_fsr4_cnb COMMAND rdna3-int8 run fsr4-cnb)
     add_test(NAME experiment_fsr4_chain COMMAND rdna3-int8 run fsr4-chain)
     add_test(NAME experiment_fsr4_graph COMMAND rdna3-int8 run fsr4-graph)
+    add_test(NAME experiment_fsr4_temporal COMMAND rdna3-int8 run fsr4-temporal)
     set_tests_properties(experiment_fsr4_graph PROPERTIES ENVIRONMENT "M12_LAST_PASS=13")
     add_test(NAME experiment_fsr4_downscale COMMAND rdna3-int8 run fsr4-downscale)
     add_test(NAME experiment_fsr4_fnb COMMAND rdna3-int8 run fsr4-fnb)

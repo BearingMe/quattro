@@ -901,7 +901,24 @@ Reverse engineering may be considered only for specific, unanswered questions an
 
 ### M13 — FSR 4 Super Resolution Pipeline
 
-**Status:** ☐ proposed
+**Status:** ✓ complete — **M13 execution gate PASS** on gfx1101 for the explicit
+1280x720 -> 1920x1080 linear/manual-exposure/LR-motion/inverted-depth/no-RCAS
+experimental permutation. Three consecutive frames execute pre -> all 14 neural
+passes -> learned reconstruction with GPU-resident history and recurrence.
+Camera-cut reset reproduces the clean initial frame byte-for-byte; NaN-motion
+local invalidation passes; frames are finite/inspectable and stage GPU
+timestamps are available. Debug **23/23 PASS (1880.33 s)**; Release
+**23/23 PASS (1701.30 s)**, including M12 exact regressions.
+See [EXP-017](experiments/EXP-017-fsr4-temporal-pipeline.md) and the
+[temporal contract](findings/2026-10-28-fsr4-temporal-contract.md).
+
+[S] User authorization now covers all remaining milestones (M13–M15), still
+subject to ordered, evidence-backed gates. This supersedes the earlier
+authorization stop after M12; it does not authorize skipping failed gates.
+M14/M15 are not passed by M13 execution. Software-vs-texture sampler
+equivalence, visual equivalence and broad/long-sequence stability remain
+**UNVERIFIED**. The current temporal API is an explicit 1–3-frame batch with an
+initial reset, not a persistent streaming pool.
 
 #### Objective
 
@@ -926,26 +943,26 @@ The exact contract must follow the selected reference version.
 
 #### Checkpoints
 
-- [ ] C01: Establish the complete input contract.
-- [ ] C02: Build deterministic test sequences.
-- [ ] C03: Implement preprocessing.
-- [ ] C04: Connect the network.
-- [ ] C05: Implement output postprocessing.
-- [ ] C06: Establish temporal history buffers.
-- [ ] C07: Execute consecutive frames.
-- [ ] C08: Capture reconstructed images.
-- [ ] C09: Test history reset and invalidation.
+- [x] C01: Establish the complete input contract.
+- [x] C02: Build deterministic test sequences.
+- [x] C03: Implement preprocessing.
+- [x] C04: Connect the network.
+- [x] C05: Implement output postprocessing.
+- [x] C06: Establish temporal history buffers.
+- [x] C07: Execute consecutive frames.
+- [x] C08: Capture reconstructed images.
+- [x] C09: Test history reset and invalidation.
 
 #### Validation Gate
 
-- [ ] Complete input pipeline executes.
-- [ ] Temporal history is managed correctly.
-- [ ] Multiple consecutive frames execute.
-- [ ] Output resolution is correct.
-- [ ] Output frames are inspectable.
-- [ ] Camera cuts and history resets are handled.
-- [ ] Missing operations are not silently bypassed.
-- [ ] GPU timing can be measured per pipeline stage.
+- [x] Complete input pipeline executes.
+- [x] Temporal history is managed correctly.
+- [x] Multiple consecutive frames execute.
+- [x] Output resolution is correct.
+- [x] Output frames are inspectable.
+- [x] Camera cuts and history resets are handled.
+- [x] Missing operations are not silently bypassed.
+- [x] GPU timing can be measured per pipeline stage.
 
 #### Deliverables
 
