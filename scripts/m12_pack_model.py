@@ -190,7 +190,7 @@ def main() -> None:
         # scales (all steps rounded to binary32):
         #   EPI0 = fl(fl(quantScale0 * weights0Scale) / quantScale1)
         #   EPI1 = fl(fl(quantScale1 * weights1Scale) / activationScaleFactor)
-        if (graph["passes"][index]["operator"] == "FasterNetBlock"
+        if (graph["passes"][index]["operator"] in ("FasterNetBlock", "FNB_CT2D_ADD")
                 and len(parameters[index]) >= 3 and len(records_of_pass) >= 6):
             s0, s1, act = (f32(parameters[index][k]) for k in range(3))
             # The driver multiplies by the reciprocal rather than dividing, so
@@ -204,6 +204,16 @@ def main() -> None:
             # folded into the FMA operand.
             folded2 = f32(f32(records_of_pass[4]["scale"]) * act)
             shader.append(f"#define M12_P{index}_EPI2 {folded2:.17e}f")
+        # The fused transposed-conv stage scales its accumulator by
+        # fnbOutputScale * upscaleWeightScale, again folded once.
+        if (graph["passes"][index]["operator"] == "FNB_CT2D_ADD"
+                and len(parameters[index]) >= 4 and len(records_of_pass) >= 8):
+            ct2d = f32(f32(parameters[index][3]) * f32(records_of_pass[6]["scale"]))
+            shader.append(f"#define M12_P{index}_CT2D_SCALE {ct2d:.17e}f")
+            skip_tensor = graph["passes"][index]["tensors"][1]
+            if "quantizationScale" in skip_tensor:
+                shader.append(f"#define M12_P{index}_SKIP_SCALE "
+                              f"{f32(skip_tensor['quantizationScale']):.17e}f")
         for ordinal, record in enumerate(records_of_pass):
             prefix = f"M12_P{index}_W{ordinal}"
             shader.append(f"#define {prefix}_OFFSET {record['offset']}u")

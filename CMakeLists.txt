@@ -407,7 +407,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     endforeach()
     # FasterNetBlock passes 4/5/7/8/10: one fused DP4A kernel per pixel, as in
     # the shipped (non-WMMA) operator. Constants come from the generated header.
-    foreach(_fnb_pass 4 5 7 8 10)
+    foreach(_fnb_pass 4 5 7 8 9 10 11)
         add_custom_command(
             OUTPUT ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso
             COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m12

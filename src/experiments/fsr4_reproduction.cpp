@@ -112,11 +112,12 @@ bool ReferenceCnb(gpu::DeviceContext& ctx, uint32_t index, const std::vector<uin
 // Isolated execution of one shipped model pass over a synthetic scratch image.
 // `inputOffset`/`outputOffset` follow the pass's own descriptor; the caller
 // supplies the tensor it wants compared.
-bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, uint32_t index, size_t inputOffset,
-                           size_t outputOffset, uint32_t gridX, uint32_t gridY,
+bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, const std::string& shaderName,
+                           size_t inputOffset, size_t outputOffset, uint32_t gridX, uint32_t gridY,
                            const std::vector<uint8_t>& input,
                            std::span<const uint8_t> initializers, size_t outputBytes,
-                           std::vector<uint8_t>& output, std::string& error);
+                           std::vector<uint8_t>& output, std::string& error,
+                           std::span<const uint8_t> skip = {}, size_t skipOffset = 0);
 
 bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
                         const std::vector<uint8_t>& input,
@@ -128,20 +129,22 @@ bool ReferenceDownscale(gpu::DeviceContext& ctx, uint32_t index,
     const size_t outputOffset = index == 3 ? 8294400 : 12441600;
     const uint32_t gridX = index == 3 ? 8 : 4;
     const uint32_t gridY = index == 3 ? 270 : 135;
-    return ReferenceIsolatedPass(ctx, index, inputOffset, outputOffset, gridX, gridY, input,
-                                 initializers, outputBytes, output, error);
+    return ReferenceIsolatedPass(ctx, "m12ref/pass" + std::to_string(index), inputOffset,
+                                 outputOffset, gridX, gridY, input, initializers, outputBytes,
+                                 output, error);
 }
 
-bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, uint32_t index, size_t inputOffset,
-                           size_t outputOffset, uint32_t gridX, uint32_t gridY,
+bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, const std::string& shaderName,
+                           size_t inputOffset, size_t outputOffset, uint32_t gridX, uint32_t gridY,
                            const std::vector<uint8_t>& input,
                            std::span<const uint8_t> initializers, size_t outputBytes,
-                           std::vector<uint8_t>& output, std::string& error) {
+                           std::vector<uint8_t>& output, std::string& error,
+                           std::span<const uint8_t> skip, size_t skipOffset) {
     gpu::ComPtr<ID3D12RootSignature> signature;
     if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
         return false;
     std::vector<uint8_t> cso;
-    const std::string name = "m12ref/pass" + std::to_string(index);
+    const std::string& name = shaderName;
     if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
         return false;
     D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
@@ -157,6 +160,8 @@ bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, uint32_t index, size_t input
     // garbage. Passes whose weights are embedded constants ignore it.
     std::vector<uint8_t> scratch(20736000 + 1024, 0);
     memcpy(scratch.data() + inputOffset, input.data(), input.size());
+    if (!skip.empty())
+        memcpy(scratch.data() + skipOffset, skip.data(), skip.size());
     const std::vector<gpu::BufferInit> buffers = {
         {4, nullptr}, {initializers.size(), initializers.data()}, {4, nullptr},
         {scratch.size(), scratch.data()},
@@ -601,38 +606,54 @@ int RunFsr4Fnb() {
     const std::span<const uint8_t> initializers = std::span<const uint8_t>(weights)
                                                      .first(kInitializerBytes);
     bool ok = true;
-    for (uint32_t pass : {4u, 5u, 7u, 8u, 10u}) {
+    for (uint32_t pass : {4u, 5u, 7u, 8u, 9u, 10u, 11u}) {
         FnbGeometry shape{};
         if (!FnbGeometryForPass(pass, shape)) {
             std::fprintf(stderr, "no FasterNetBlock geometry for pass %u\n", pass);
             return 1;
         }
-        if (!SaveNumericIsa(ctx, ext, "m12ref/pass" + std::to_string(pass),
+        // Pass 11's shipped 32/1 overload stores without a logical-size
+        // predicate and corrupts its own output band; the reproduction
+        // predicates, so it is compared against the labelled causal control.
+        const std::string referenceShader =
+            pass == 11 ? "m12control/pass11" : "m12ref/pass" + std::to_string(pass);
+        if (!SaveNumericIsa(ctx, ext, referenceShader,
                             directory / ("reference-pass" + std::to_string(pass) + ".isa"),
                             false, error)) {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
         }
         const size_t tensorBytes = size_t(shape.pixels) * shape.channels;
+        const size_t outBytes = shape.outFeatures == 0
+            ? tensorBytes
+            : size_t(shape.outWidth) * shape.outHeight * shape.outFeatures;
         std::string passIsa;
         for (uint32_t fixture = 0; fixture < 2; ++fixture) {
             std::vector<uint8_t> input(tensorBytes, 0);
+            std::vector<uint8_t> skip(outBytes, 0);
             uint32_t seed = 0x5EED4F12u;
+            uint32_t skipSeed = 0x5EED4F13u;
             if (fixture == 1) {
                 for (uint8_t& value : input) {
                     seed = seed * 1664525u + 1013904223u;
                     value = uint8_t(seed >> 24);
                 }
+                for (uint8_t& value : skip) {
+                    skipSeed = skipSeed * 1664525u + 1013904223u;
+                    value = uint8_t(skipSeed >> 24);
+                }
             }
             std::vector<uint8_t> output, repeated, reference;
             std::string repeatedIsa;
             const bool ownOk =
-                RunFasterNetBlock(ctx, ext, pass, input, weights, output, passIsa, error);
+                RunFasterNetBlock(ctx, ext, pass, input, skip, weights, output, passIsa, error);
             const bool repeatOk = ownOk &&
-                RunFasterNetBlock(ctx, ext, pass, input, weights, repeated, repeatedIsa, error);
+                RunFasterNetBlock(ctx, ext, pass, input, skip, weights, repeated, repeatedIsa,
+                                  error);
             const bool referenceOk = repeatOk && ReferenceIsolatedPass(
-                ctx, pass, shape.inputOffset, shape.outputOffset, shape.gridX, shape.gridY,
-                input, initializers, tensorBytes, reference, error);
+                ctx, referenceShader, shape.inputOffset, shape.outputOffset, shape.gridX,
+                shape.gridY, input, initializers, outBytes, reference, error,
+                skip, shape.skipOffset);
             if (!ownOk || !repeatOk || !referenceOk) {
                 std::fprintf(stderr, "fnb pass %u fixture %u: %s\n", pass, fixture, error.c_str());
                 return 1;
@@ -661,12 +682,12 @@ int RunFsr4Fnb() {
                 }
             }
             const bool deterministic = output == repeated;
-            const bool native = passIsa.find("v_wmma_i32_16x16x16_iu8") != std::string::npos;
+            const bool dp4a = passIsa.find("v_dot4_i32_iu8") != std::string::npos;
             std::printf("FasterNet pass%u fixture%u: %zu/%zu mismatches | max delta %d | "
-                        "deterministic %s | native WMMA %s\n",
+                        "deterministic %s | DP4A %s\n",
                         pass, fixture, different, output.size(), maxDelta,
-                        deterministic ? "yes" : "NO", native ? "yes" : "NO");
-            ok = ok && different == 0 && deterministic;
+                        deterministic ? "yes" : "NO", dp4a ? "yes" : "NO");
+            ok = ok && different == 0 && deterministic && dp4a;
             for (size_t i = 0, shown = 0; i < output.size() && shown < 8; ++i) {
                 if (output[i] == reference[i])
                     continue;
@@ -695,3 +716,5 @@ int RunFsr4Fnb() {
 }
 
 } // namespace experiments
+
+

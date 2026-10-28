@@ -140,8 +140,87 @@
 #define FNB_EPI2 M12_P10_EPI2 
 #define FNB_QOUT0 M12_P10_ARG3
 #define FNB_QOUT1 M12_P10_ARG4
+#elif FNB_PASS == 9
+#define FNB_FEATURES 64
+#define FNB_PIXELS 32400
+#define FNB_WIDTH 240
+#define FNB_W0 M12_P9_W0_OFFSET
+#define FNB_W0_S0 M12_P9_W0_STRIDE0
+#define FNB_W0_S1 M12_P9_W0_STRIDE1
+#define FNB_W0_S3 M12_P9_W0_STRIDE3
+#define FNB_B0 M12_P9_W1_OFFSET
+#define FNB_WSCALE0 M12_P9_W0_SCALE
+#define FNB_W2 M12_P9_W2_OFFSET
+#define FNB_W2_S3 M12_P9_W2_STRIDE3
+#define FNB_B1 M12_P9_W3_OFFSET
+#define FNB_WSCALE1 M12_P9_W2_SCALE
+#define FNB_W4 M12_P9_W4_OFFSET
+#define FNB_W4_S3 M12_P9_W4_STRIDE3
+#define FNB_B2 M12_P9_W5_OFFSET
+#define FNB_WSCALE2 M12_P9_W4_SCALE
+#define FNB_S0 M12_P9_ARG0
+#define FNB_S1 M12_P9_ARG1
+#define FNB_ACT M12_P9_ARG2
+#define FNB_EPI0 M12_P9_EPI0
+#define FNB_EPI1 M12_P9_EPI1
+#define FNB_EPI2 M12_P9_EPI2
+#define FNB_CT2D 1
+#define FNB_FNB_OUT M12_P9_ARG3
+#define FNB_QOUT0 M12_P9_ARG4
+#define FNB_QOUT1 M12_P9_ARG5
+#define FNB_OUT_FEATURES 32
+#define FNB_OUT_WIDTH 480
+#define FNB_OUT_HEIGHT 270
+#define FNB_CT2D_W M12_P9_W6_OFFSET
+#define FNB_CT2D_S0 M12_P9_W6_STRIDE0
+#define FNB_CT2D_S1 M12_P9_W6_STRIDE1
+#define FNB_CT2D_S2 M12_P9_W6_STRIDE2
+#define FNB_CT2D_S3 M12_P9_W6_STRIDE3
+#define FNB_CT2D_B M12_P9_W7_OFFSET
+#define FNB_CT2D_SCALE M12_P9_CT2D_SCALE
+#define FNB_SKIP_SCALE M12_P9_SKIP_SCALE
+#elif FNB_PASS == 11
+#define FNB_FEATURES 32
+#define FNB_PIXELS 129600
+#define FNB_WIDTH 480
+#define FNB_W0 M12_P11_W0_OFFSET
+#define FNB_W0_S0 M12_P11_W0_STRIDE0
+#define FNB_W0_S1 M12_P11_W0_STRIDE1
+#define FNB_W0_S3 M12_P11_W0_STRIDE3
+#define FNB_B0 M12_P11_W1_OFFSET
+#define FNB_WSCALE0 M12_P11_W0_SCALE
+#define FNB_W2 M12_P11_W2_OFFSET
+#define FNB_W2_S3 M12_P11_W2_STRIDE3
+#define FNB_B1 M12_P11_W3_OFFSET
+#define FNB_WSCALE1 M12_P11_W2_SCALE
+#define FNB_W4 M12_P11_W4_OFFSET
+#define FNB_W4_S3 M12_P11_W4_STRIDE3
+#define FNB_B2 M12_P11_W5_OFFSET
+#define FNB_WSCALE2 M12_P11_W4_SCALE
+#define FNB_S0 M12_P11_ARG0
+#define FNB_S1 M12_P11_ARG1
+#define FNB_ACT M12_P11_ARG2
+#define FNB_EPI0 M12_P11_EPI0
+#define FNB_EPI1 M12_P11_EPI1
+#define FNB_EPI2 M12_P11_EPI2
+#define FNB_CT2D 1
+#define FNB_FNB_OUT M12_P11_ARG3
+// This instantiation takes a quantized output tensor: one scale for both halves.
+#define FNB_QOUT0 M12_P11_OUTPUT_SCALE
+#define FNB_QOUT1 M12_P11_OUTPUT_SCALE
+#define FNB_OUT_FEATURES 16
+#define FNB_OUT_WIDTH 960
+#define FNB_OUT_HEIGHT 540
+#define FNB_CT2D_W M12_P11_W6_OFFSET
+#define FNB_CT2D_S0 M12_P11_W6_STRIDE0
+#define FNB_CT2D_S1 M12_P11_W6_STRIDE1
+#define FNB_CT2D_S2 M12_P11_W6_STRIDE2
+#define FNB_CT2D_S3 M12_P11_W6_STRIDE3
+#define FNB_CT2D_B M12_P11_W7_OFFSET
+#define FNB_CT2D_SCALE M12_P11_CT2D_SCALE
+#define FNB_SKIP_SCALE M12_P11_SKIP_SCALE
 #else
-#error "FNB_PASS must be 4, 5, 7, 8 or 10"
+#error "FNB_PASS must be 4, 5, 7, 8, 9, 10 or 11"
 #endif
 
 #define FNB_N FNB_FEATURES
@@ -286,6 +365,71 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     ////////////////////////////////// Add + store //////////////////////////////////
+#if FNB_CT2D
+    // The block output (with its two-scale residual) is requantized into the
+    // packed activation the transposed convolution consumes, then upscaled 2x
+    // and added to the skip tensor at the upscaled resolution.
+    uint packedVss[FNB_N / 4];
+    [unroll]
+    for (uint i = 0; i < FNB_N; i += 4) {
+        const float4 b = Half4(w, FNB_B2 + i * 2);
+        const int4 v = int4(conv3[i], conv3[i + 1], conv3[i + 2], conv3[i + 3]);
+        float4 result = mad(float4(v), FNB_EPI2, b);
+        float4 skip;
+        if (i < FNB_H) {
+            const uint packed = pre[i / 4];
+            skip = float4(Lane(packed, 0), Lane(packed, 1), Lane(packed, 2), Lane(packed, 3));
+            result += skip * FNB_S0;
+        } else {
+            const uint packed = sec[(i - FNB_H) / 4];
+            skip = float4(Lane(packed, 0), Lane(packed, 1), Lane(packed, 2), Lane(packed, 3));
+            result += skip * FNB_S1;
+        }
+        packedVss[i / 4] = pack_clamp_s8(int4(round(result * (1.0 / FNB_FNB_OUT))));
+    }
+
+    const uint skipBase = FNB_PIXELS * FNB_N;
+    [unroll]
+    for (uint phase = 0; phase < 4; ++phase) {
+        const uint px = phase & 1u;
+        const uint py = phase >> 1u;
+        const uint ox2 = ox * 2 + px;
+        const uint oy2 = oy * 2 + py;
+        // The reproduction predicates to the logical output extent. Pass 11's
+        // shipped 32/1 overload does not, so it must be compared against the
+        // labelled predication control (EXP-010).
+        if (ox2 >= FNB_OUT_WIDTH || oy2 >= FNB_OUT_HEIGHT)
+            continue;
+        const uint outPixel = oy2 * FNB_OUT_WIDTH + ox2;
+        [unroll]
+        for (uint f = 0; f < FNB_OUT_FEATURES; f += 4) {
+            int accum[4] = {0, 0, 0, 0};
+            [unroll]
+            for (uint lane = 0; lane < 4; ++lane) {
+                const uint woff = FNB_CT2D_W + px * FNB_CT2D_S0 + py * FNB_CT2D_S1 +
+                                  (f + lane) * FNB_CT2D_S2;
+                [unroll]
+                for (uint c = 0; c < FNB_N; c += 16) {
+                    const uint4 wd = w.Load<uint4>(woff + c * FNB_CT2D_S3);
+                    accum[lane] = dot4add_i8packed(wd.x, packedVss[c / 4 + 0], accum[lane]);
+                    accum[lane] = dot4add_i8packed(wd.y, packedVss[c / 4 + 1], accum[lane]);
+                    accum[lane] = dot4add_i8packed(wd.z, packedVss[c / 4 + 2], accum[lane]);
+                    accum[lane] = dot4add_i8packed(wd.w, packedVss[c / 4 + 3], accum[lane]);
+                }
+            }
+            const float4 b = Half4(w, FNB_CT2D_B + f * 2);
+            float4 result = mad(float4(accum[0], accum[1], accum[2], accum[3]),
+                                FNB_CT2D_SCALE, b);
+            const uint skipAt = skipBase + outPixel * FNB_OUT_FEATURES + f;
+            uint4 sk = src.Load<uint4>(skipAt);
+            result += float4(Lane(sk.x, 0), Lane(sk.x, 1), Lane(sk.x, 2), Lane(sk.x, 3)) *
+                      FNB_SKIP_SCALE;
+            const float rcpOut = f < FNB_OUT_FEATURES / 2 ? (1.0 / FNB_QOUT0)
+                                                         : (1.0 / FNB_QOUT1);
+            dst.Store(outPixel * FNB_OUT_FEATURES + f, pack_clamp_s8(int4(round(result * rcpOut))));
+        }
+    }
+#else
     [unroll]
     for (uint i = 0; i < FNB_N; i += 4) {
         const float4 b = Half4(w, FNB_B2 + i * 2);
@@ -306,7 +450,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         dst.Store(base + i, pack_clamp_s8(int4(q)));
     }
+#endif
 }
+
 
 
 
