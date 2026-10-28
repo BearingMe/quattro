@@ -808,6 +808,7 @@ and FP16 output � 0/16,588,800 halfword mismatches on both fixtures. Every
 operator of the pinned model now has an independent byte-exact reproduction;
 C04 is evidenced. What remains for the gate is integration: C07 (GPU-resident
 full graph) and C08/C09 (per-pass and end-to-end comparison).
+Debug and Release CTest both **20/20 PASS** (782.62 s / 771.07 s) at this state.
 
 #### Objective
 
@@ -1231,6 +1232,7 @@ For each milestone:
 7. Stop.
 
 Do not automatically advance to the next milestone. The project exists to understand the system, not merely to produce a working implementation.
+
 
 
 
