@@ -1,4 +1,5 @@
 #include "fsr4_fnb.h"
+#include "fsr4_graph.h"
 #include "fsr4_weights.h"
 #include "gpu/compute.h"
 #include "gpu/graph.h"
@@ -33,18 +34,17 @@ bool FnbGeometryForPass(uint32_t pass, FnbGeometry& geometry) {
     }
 }
 
-bool RunFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
-                       uint32_t pass, std::span<const uint8_t> input,
-                       std::span<const uint8_t> skip, std::span<const uint8_t> weights,
-                       std::vector<uint8_t>& output, std::string& isa, std::string& error) {
-    output.clear();
-    isa.clear();
+bool AppendFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                          DispatchPlan& plan, uint32_t pass, size_t input, size_t skip,
+                          size_t weights, size_t& output, std::string& error) {
+    (void)context; // PSOs are created through the supplied AMD extension interface.
     FnbGeometry shape{};
     if (!FnbGeometryForPass(pass, shape)) {
         error = "unsupported FasterNetBlock pass";
         return false;
     }
-    if (input.size() != size_t(shape.pixels) * shape.channels) {
+    if (!plan.signature || input >= plan.buffers.size() || weights >= plan.buffers.size() ||
+        input == weights || plan.buffers[input].bytes != size_t(shape.pixels) * shape.channels) {
         error = "unsupported FasterNetBlock input shape";
         return false;
     }
@@ -52,53 +52,74 @@ bool RunFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensio
     const size_t outBytes = shape.outFeatures == 0
         ? tensorBytes
         : size_t(shape.outWidth) * shape.outHeight * shape.outFeatures;
-    if (shape.outFeatures != 0 && skip.size() != outBytes) {
+    if (shape.outFeatures != 0 &&
+        (skip >= plan.buffers.size() || plan.buffers[skip].bytes != outBytes)) {
         error = "unsupported FasterNetBlock skip tensor shape";
         return false;
     }
-    if (!ValidateWeights(weights, error))
-        return false;
-
-    gpu::ComPtr<ID3D12RootSignature> signature;
-    if (!gpu::CreateBufferPassRootSignature(context, signature, error))
-        return false;
     std::vector<uint8_t> cso;
     const std::string name = "m12/fnb" + std::to_string(pass);
     if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
         return false;
     D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-    desc.pRootSignature = signature.Get();
+    desc.pRootSignature = plan.signature.Get();
     desc.CS = {cso.data(), cso.size()};
     gpu::ComPtr<ID3D12PipelineState> pso;
     AmdExtD3DPipelineHandle handle{};
     AmdExtD3DComputeShaderStats stats{};
     if (!gpu::CreateAnalyzedComputePipeline(extensions, desc, pso, handle, stats, error))
         return false;
-    std::string statsLine;
+    std::string isa, statsLine;
     if (!gpu::GetPipelineIsa(extensions, handle, isa, statsLine, error))
         return false;
 
-    std::vector<uint8_t> source;
-    source.reserve(input.size() + skip.size());
-    source.insert(source.end(), input.begin(), input.end());
-    source.insert(source.end(), skip.begin(), skip.end());
-    const std::vector<gpu::BufferInit> buffers = {
-        {source.size(), source.data()},    // 0: source tensor (then skip tensor)
-        {weights.size(), weights.data()},  // 1: checked payload
-        {outBytes, nullptr},               // 2: output tensor
-        {4, nullptr},                      // 3: bound-but-unused second UAV slot
-    };
+    plan.convolutionIsa.push_back(std::move(isa));
     gpu::BufferPass stage{};
+    size_t source = input;
+    if (shape.outFeatures != 0) {
+        source = plan.buffers.size();
+        plan.buffers.push_back({tensorBytes + outBytes, nullptr});
+        stage.copiesBefore = {{input, source, 0, 0, tensorBytes},
+                              {skip, source, 0, tensorBytes, outBytes}};
+    }
+    const size_t destination = plan.buffers.size();
+    plan.buffers.push_back({outBytes, nullptr});
+    const size_t unused = plan.buffers.size();
+    plan.buffers.push_back({4, nullptr});
     stage.pso = pso.Get();
     stage.gridX = (shape.pixels + 63) / 64;
     stage.gridY = 1;
-    stage.srv0 = 0;
-    stage.srv1 = 1;
-    stage.uav0 = 2;
-    stage.uav1 = 3;
+    stage.srv0 = source;
+    stage.srv1 = weights;
+    stage.uav0 = destination;
+    stage.uav1 = unused;
+    plan.psos.push_back(pso);
+    plan.passes.push_back(stage);
+    output = destination;
+    return true;
+}
+
+bool RunFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                       uint32_t pass, std::span<const uint8_t> input,
+                       std::span<const uint8_t> skip, std::span<const uint8_t> weights,
+                       std::vector<uint8_t>& output, std::string& isa, std::string& error) {
+    output.clear();
+    isa.clear();
+    if (!ValidateWeights(weights, error))
+        return false;
+    DispatchPlan plan;
+    if (!gpu::CreateBufferPassRootSignature(context, plan.signature, error))
+        return false;
+    plan.buffers = {{input.size(), input.data()}, {weights.size(), weights.data()},
+                    {skip.empty() ? 4 : skip.size(), skip.empty() ? nullptr : skip.data()}};
+    size_t destination = 0;
+    if (!AppendFasterNetBlock(context, extensions, plan, pass, 0, 2, 1, destination, error))
+        return false;
+    isa = plan.convolutionIsa.front();
     std::vector<std::vector<uint8_t>> snapshots;
-    return gpu::RunBufferPasses(context, signature, buffers, {stage}, 3, {false}, snapshots, 2,
-                                outBytes, output, error);
+    return gpu::RunBufferPasses(context, plan.signature, plan.buffers, plan.passes, destination,
+                                {false}, snapshots, destination,
+                                plan.buffers[destination].bytes, output, error);
 }
 
 } // namespace inference::fsr4

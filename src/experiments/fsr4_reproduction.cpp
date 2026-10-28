@@ -7,6 +7,7 @@
 #include "inference/models/fsr4_fnb.h"
 #include "inference/models/fsr4_cnb_ct2d.h"
 #include "inference/models/fsr4_weights.h"
+#include "inference/models/fsr4_graph.h"
 #include "core/numerics.h"
 #include "gpu/compute.h"
 #include "gpu/graph.h"
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <cmath>
 
 namespace experiments {
 namespace {
@@ -67,6 +69,122 @@ bool ReferencePass0(gpu::DeviceContext& ctx, const std::vector<uint8_t>& input,
     std::vector<std::vector<uint8_t>> snapshots;
     return gpu::RunBufferPasses(ctx, signature, buffers, {pass}, 3, {false}, snapshots,
                                 3, size_t(960) * 540 * 16, output, error);
+}
+
+// Two unmodified shipped passes in one submission, with a diagnostic snapshot
+// at their boundary. Scratch/tail layout follows the pinned reference graph.
+bool ReferenceInputChain(gpu::DeviceContext& ctx, const std::vector<uint8_t>& paddedInput,
+                          std::span<const uint8_t> initializers,
+                          std::vector<uint8_t>& pass0, std::vector<uint8_t>& pass1,
+                          std::string& error) {
+    constexpr size_t tensorBytes = size_t(960) * 540 * 16;
+    gpu::ComPtr<ID3D12RootSignature> signature;
+    if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
+        return false;
+    std::vector<gpu::ComPtr<ID3D12PipelineState>> psos;
+    std::vector<gpu::BufferPass> stages;
+    for (uint32_t index : {0u, 1u}) {
+        std::vector<uint8_t> cso;
+        const std::string name = "m12ref/pass" + std::to_string(index);
+        if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
+            return false;
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = signature.Get();
+        desc.CS = {cso.data(), cso.size()};
+        gpu::ComPtr<ID3D12PipelineState> pso;
+        if (FAILED(ctx.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
+            error = "cannot create reference chain PSO: " + name;
+            return false;
+        }
+        gpu::BufferPass stage{};
+        stage.pso = pso.Get();
+        stage.gridX = index == 0 ? 120 : 15;
+        stage.gridY = index == 0 ? 68 : 540;
+        stage.srv0 = 0;
+        stage.srv1 = 1;
+        stage.uav0 = 2;
+        stage.uav1 = 3;
+        psos.push_back(pso);
+        stages.push_back(stage);
+    }
+    const std::vector<gpu::BufferInit> buffers = {
+        {paddedInput.size(), paddedInput.data()}, {initializers.size(), initializers.data()},
+        {4, nullptr}, {20736000 + 1024, nullptr},
+    };
+    std::vector<std::vector<uint8_t>> snapshots;
+    std::vector<uint8_t> raw;
+    if (!gpu::RunBufferPasses(ctx, signature, buffers, stages, 3, {true, false}, snapshots,
+                              3, tensorBytes * 2, raw, error))
+        return false;
+    pass0.assign(snapshots.front().begin(), snapshots.front().begin() + tensorBytes);
+    pass1.assign(raw.begin() + tensorBytes, raw.end());
+    return true;
+}
+
+// Logical boundaries from the extracted pinned graph (not rounded dispatch extents).
+constexpr size_t kGraphOffsets[] = {0, 8294400, 0, 8294400, 12441600, 8294400,
+    12441600, 14515200, 12441600, 16588800, 8294400, 12441600, 0, 0};
+constexpr size_t kGraphBytes[] = {8294400, 8294400, 8294400, 4147200, 4147200,
+    4147200, 2073600, 2073600, 2073600, 4147200, 4147200, 8294400, 8294400, 33177600};
+constexpr uint32_t kGraphWidths[] = {960, 960, 960, 480, 480, 480, 240, 240,
+    240, 480, 480, 960, 960, 1920};
+constexpr uint32_t kGraphChannels[] = {16, 16, 16, 32, 32, 32, 64, 64,
+    64, 32, 32, 16, 16, 8};
+
+bool ReferenceModelGraph(gpu::DeviceContext& ctx, const std::vector<uint8_t>& paddedInput,
+                          std::span<const uint8_t> initializers, uint32_t lastPass,
+                          bool predicated, std::vector<std::vector<uint8_t>>& tensors,
+                          std::string& error) {
+    constexpr uint32_t gridX[] = {120, 15, 15, 8, 8, 8, 4, 4, 4, 30, 8, 8, 15, 120};
+    constexpr uint32_t gridY[] = {68, 540, 540, 270, 270, 270, 135, 135, 135, 17, 270, 270, 540, 68};
+    gpu::ComPtr<ID3D12RootSignature> signature;
+    if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
+        return false;
+    std::vector<gpu::ComPtr<ID3D12PipelineState>> psos;
+    std::vector<gpu::BufferPass> stages;
+    for (uint32_t pass = 0; pass <= lastPass; ++pass) {
+        const std::string name = predicated && pass == 11 ? "m12control/pass11"
+            : "m12ref/pass" + std::to_string(pass);
+        std::vector<uint8_t> cso;
+        if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
+            return false;
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = signature.Get();
+        desc.CS = {cso.data(), cso.size()};
+        gpu::ComPtr<ID3D12PipelineState> pso;
+        if (FAILED(ctx.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
+            error = "cannot create reference graph PSO: " + name;
+            return false;
+        }
+        gpu::BufferPass stage{};
+        stage.pso = pso.Get();
+        stage.gridX = gridX[pass];
+        stage.gridY = gridY[pass];
+        stage.srv0 = 0;
+        stage.srv1 = 1;
+        stage.uav0 = 2;
+        stage.uav1 = 3;
+        stage.snapshotBuffer = pass == 13 ? 2 : 3;
+        psos.push_back(pso);
+        stages.push_back(stage);
+    }
+    const std::vector<gpu::BufferInit> buffers = {
+        {paddedInput.size(), paddedInput.data()}, {initializers.size(), initializers.data()},
+        {size_t(1920) * 1088 * 8 * 2, nullptr}, {20736000 + 1024, nullptr},
+    };
+    std::vector<std::vector<uint8_t>> snapshots;
+    std::vector<uint8_t> ignored;
+    if (!gpu::RunBufferPasses(ctx, signature, buffers, stages, 3,
+                              std::vector<bool>(stages.size(), true), snapshots,
+                              lastPass == 13 ? 2 : 3, lastPass == 13 ? kGraphBytes[13] : 4,
+                              ignored, error))
+        return false;
+    tensors.clear();
+    for (uint32_t pass = 0; pass <= lastPass; ++pass) {
+        const auto first = snapshots[pass].begin() + kGraphOffsets[pass];
+        tensors.emplace_back(first, first + kGraphBytes[pass]);
+    }
+    return true;
 }
 
 bool ReferenceCnb(gpu::DeviceContext& ctx, uint32_t index, const std::vector<uint8_t>& input,
@@ -355,6 +473,339 @@ int RunFsr4Pass0() {
     }
     std::printf("FSR4 pass0: %s (only 1/14 passes; not the M12 gate)\n", allOk ? "PASS" : "FAIL");
     return allOk ? 0 : 1;
+}
+
+bool GraphDescriptorRejections(gpu::DeviceContext& ctx, std::string& error) {
+    using namespace inference::fsr4;
+    DispatchPlan plan;
+    if (!gpu::CreateBufferPassRootSignature(ctx, plan.signature, error))
+        return false;
+    plan.buffers = {{size_t(1920) * 1080 * 16, nullptr}, {136848, nullptr}};
+    size_t destination = 0;
+    if (!AppendInputConvolution(ctx, plan, 0, 1, destination, error))
+        return false;
+    const auto rejects = [&](gpu::BufferPass pass, const char* expected) {
+        std::vector<std::vector<uint8_t>> snapshots;
+        std::vector<uint8_t> output;
+        std::string diagnostic;
+        return !gpu::RunBufferPasses(ctx, plan.signature, plan.buffers, {pass}, destination,
+                                     {false}, snapshots, destination, 4, output, diagnostic) &&
+               diagnostic.find(expected) != std::string::npos;
+    };
+    for (const auto& copy : {gpu::BufferCopy{SIZE_MAX, destination, 0, 0, 4},
+                             {0, SIZE_MAX, 0, 0, 4}, {0, 0, 0, 0, 4},
+                             {0, destination, 0, 0, 0},
+                             {0, destination, SIZE_MAX, 0, 4},
+                             {0, destination, 0, SIZE_MAX, 4},
+                             {3, destination, 0, 0, 5}, {destination, 3, 0, 0, 5}}) {
+        auto pass = plan.passes.front();
+        pass.copiesBefore = {copy};
+        if (!rejects(pass, "invalid buffer copy")) {
+            error = "copy validation did not fail closed";
+            return false;
+        }
+    }
+    auto pass = plan.passes.front();
+    pass.snapshotBuffer = plan.buffers.size();
+    if (!rejects(pass, "invalid snapshot buffer")) {
+        error = "snapshot validation did not fail closed";
+        return false;
+    }
+    pass = plan.passes.front();
+    pass.srv0 = pass.uav0;
+    if (!rejects(pass, "invalid buffer pass")) {
+        error = "SRV/UAV alias validation did not fail closed";
+        return false;
+    }
+    std::printf("graph descriptor regressions: 8 invalid copies, snapshot index, SRV/UAV alias rejected\n");
+    return true;
+}
+
+int RunFsr4Graph() {
+    using namespace inference::fsr4;
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    uint32_t lastPass = 13;
+    if (const char* prefix = std::getenv("M12_LAST_PASS")) {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(prefix, &end, 10);
+        if (!*prefix || *end || value > 13) {
+            std::fprintf(stderr, "M12_LAST_PASS must be 0..13\n");
+            return 2;
+        }
+        lastPass = uint32_t(value);
+    }
+    std::filesystem::path captureDirectory;
+    if (const char* dump = std::getenv("M12_DUMP"); dump && *dump == '1') {
+        const char* id = std::getenv("M12_RUN_ID");
+        const std::string runId = id ? id : "manual";
+        if (runId.empty() || runId.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos) {
+            std::fprintf(stderr, "M12_RUN_ID must contain only letters, digits, '-' or '_'\n");
+            return 2;
+        }
+        captureDirectory = RepositoryRoot() / "build/reports/m12/graph-captures" / runId;
+        std::error_code ec;
+        std::filesystem::create_directories(captureDirectory.parent_path(), ec);
+        if (ec || !std::filesystem::create_directory(captureDirectory, ec) || ec) {
+            std::fprintf(stderr, "graph capture directory exists or cannot be created\n");
+            return 1;
+        }
+    }
+    std::vector<uint8_t> weights;
+    std::string error;
+    if (!LoadWeights(RepositoryRoot() / "build/reports/m12/weights.bin", weights, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::DeviceContext ctx;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !ext.waveMatrixSupported) {
+        std::fprintf(stderr, "native WMMA unavailable: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    struct ExtensionLifetime {
+        gpu::AmdExtensions& value;
+        ~ExtensionLifetime() { gpu::ReleaseAmdExtensions(value); }
+    } lifetime{ext};
+    std::printf("adapter: %ls | pinned FSR4 v07 i8 quality | last pass %u\n",
+                ctx.adapter.name.c_str(), lastPass);
+    if (!GraphDescriptorRejections(ctx, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    const auto initializers = std::span<const uint8_t>(weights).first(kInitializerBytes);
+    bool ok = true;
+    for (uint32_t fixture = 0; fixture < 3; ++fixture) {
+        std::vector<uint8_t> input(size_t(1920) * 1088 * 16, 0);
+        uint32_t seed = 0x5EED4F12u;
+        for (size_t pixel = 0; pixel < size_t(1920) * 1080; ++pixel) {
+            for (uint32_t c = 0; c < 7; ++c) {
+                seed = seed * 1664525u + 1013904223u;
+                float value = 0.0f;
+                if (fixture == 1 && pixel == size_t(540) * 1920 + 960)
+                    value = c & 1 ? -1.0f : 1.0f;
+                if (fixture == 2)
+                    value = float(int((seed >> 16) % 4095u) - 2047) / 1024.0f;
+                const uint16_t bits = core::F32ToF16(value);
+                memcpy(input.data() + pixel * 16 + c * 2, &bits, 2);
+            }
+        }
+        const auto logicalInput = std::span<const uint8_t>(input).first(size_t(1920) * 1080 * 16);
+        std::vector<uint8_t> output, repeated;
+        std::vector<std::vector<uint8_t>> own, control, shipped;
+        std::vector<std::string> isa, repeatIsa;
+        if (!RunModelGraph(ctx, ext, logicalInput, weights, lastPass, output, &own, isa, error) ||
+            !RunModelGraph(ctx, ext, logicalInput, weights, lastPass, repeated, nullptr, repeatIsa, error) ||
+            !ReferenceModelGraph(ctx, input, initializers, lastPass, true, control, error)) {
+            std::fprintf(stderr, "graph fixture%u: %s\n", fixture, error.c_str());
+            return 1;
+        }
+        if (own.size() != lastPass + 1 || control.size() != own.size() ||
+            output.size() != kGraphBytes[lastPass] || output != own.back()) {
+            std::fprintf(stderr, "graph boundary count/size mismatch\n");
+            return 1;
+        }
+        for (uint32_t pass = 0; pass <= lastPass; ++pass) {
+            if (own[pass].size() != kGraphBytes[pass] || control[pass].size() != kGraphBytes[pass]) {
+                std::fprintf(stderr, "graph pass%u dimension mismatch\n", pass);
+                return 1;
+            }
+            size_t different = 0;
+            for (size_t i = 0; i < own[pass].size(); ++i)
+                different += own[pass][i] != control[pass][i];
+            std::printf("graph fixture%u pass%u: %zu/%zu differing bytes vs %s\n",
+                        fixture, pass, different, own[pass].size(),
+                        pass < 11 ? "shipped" : "labelled pass11 predication control");
+            ok = ok && different == 0;
+        }
+        const size_t native = std::count_if(isa.begin(), isa.end(), [](const std::string& text) {
+            return text.find("v_wmma_i32_16x16x16_iu8") != std::string::npos;
+        });
+        const size_t expectedNative = (lastPass >= 1 ? 3 : 0) + (lastPass >= 2 ? 3 : 0) +
+            (lastPass >= 3 ? 1 : 0) + (lastPass >= 6 ? 1 : 0) + (lastPass >= 12 ? 3 : 0);
+        std::printf("graph fixture%u: snapshot-free repeat %s | native WMMA %zu/%zu\n",
+                    fixture, output == repeated ? "identical" : "DIFFERENT", native, expectedNative);
+        ok = ok && output == repeated && native == expectedNative;
+        if (lastPass == 13) {
+            size_t nonfinite = 0, nonzero = 0;
+            float minValue = INFINITY, maxValue = -INFINITY;
+            for (size_t i = 0; i < output.size(); i += 2) {
+                uint16_t bits = 0;
+                memcpy(&bits, output.data() + i, 2);
+                const float value = core::F16ToF32(bits);
+                nonfinite += !std::isfinite(value);
+                nonzero += value != 0.0f;
+                minValue = std::min(minValue, value);
+                maxValue = std::max(maxValue, value);
+            }
+            std::printf("graph fixture%u FP16: %zu halfwords | nonfinite %zu | nonzero %zu | range [%g,%g]\n",
+                        fixture, output.size() / 2, nonfinite, nonzero, minValue, maxValue);
+            ok = ok && nonfinite == 0 && nonzero > 0;
+        }
+        // The unmodified reference is raced at pass 11. Measure it separately,
+        // never require equality in the known corruption band or relabel it.
+        if (fixture == 2 && lastPass >= 11) {
+            if (!ReferenceModelGraph(ctx, input, initializers, lastPass, false, shipped, error)) {
+                std::fprintf(stderr, "shipped graph: %s\n", error.c_str());
+                return 1;
+            }
+            for (uint32_t pass = 0; pass <= lastPass; ++pass) {
+                const uint32_t band = pass == 11 ? 64 : pass == 12 ? 66 : pass == 13 ? 132 : 0;
+                size_t different = 0, outside = 0;
+                for (size_t i = 0; i < own[pass].size(); ++i) {
+                    if (own[pass][i] == shipped[pass][i])
+                        continue;
+                    ++different;
+                    const size_t pixel = i / (kGraphChannels[pass] * (pass == 13 ? 2 : 1));
+                    outside += pixel % kGraphWidths[pass] >= band;
+                }
+                std::printf("shipped fixture2 pass%u: %zu differing bytes | outside x<%u: %zu\n",
+                            pass, different, band, outside);
+                ok = ok && outside == 0;
+            }
+        }
+        if (!captureDirectory.empty()) {
+            for (uint32_t pass = 0; pass <= lastPass; ++pass) {
+                const std::string stem = "fixture" + std::to_string(fixture) + "-pass" + std::to_string(pass);
+                for (const auto& [suffix, data] :
+                     {std::pair<const char*, const std::vector<uint8_t>*>{"-own.bin", &own[pass]},
+                      {"-control.bin", &control[pass]}}) {
+                    std::ofstream file(captureDirectory / (stem + suffix), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(data->data()), std::streamsize(data->size()));
+                    if (!file)
+                        return 1;
+                }
+                if (!shipped.empty()) {
+                    std::ofstream file(captureDirectory / (stem + "-shipped.bin"), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(shipped[pass].data()), std::streamsize(shipped[pass].size()));
+                    if (!file)
+                        return 1;
+                }
+            }
+        }
+    }
+    std::string queueErrors;
+    size_t intrinsicMessages = 0;
+    if (!gpu::InfoQueueCleanWithFilter(ctx, gpu::IsBufferPassWmmaDiagnostic,
+                                      intrinsicMessages, queueErrors)) {
+        std::fprintf(stderr, "%s\n", queueErrors.c_str());
+        return 1;
+    }
+    std::printf("FSR4 GPU-resident graph prefix 0..%u: %s | exact named root4 intrinsic messages %zu\n",
+                lastPass, ok ? "PASS" : "FAIL", intrinsicMessages);
+    return ok ? 0 : 1;
+}
+
+int RunFsr4Chain() {
+    using namespace inference::fsr4;
+    std::vector<uint8_t> weights;
+    std::string error;
+    if (!LoadWeights(RepositoryRoot() / "build/reports/m12/weights.bin", weights, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::DeviceContext ctx;
+    if (!gpu::CreateComputeDevice(ctx, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    gpu::AmdExtensions ext;
+    if (!gpu::LoadAmdExtensions(ctx, ext, error) || !ext.waveMatrixSupported) {
+        std::fprintf(stderr, "native WMMA unavailable: %s\n", error.c_str());
+        gpu::ReleaseAmdExtensions(ext);
+        return 1;
+    }
+    struct ExtensionLifetime {
+        gpu::AmdExtensions& value;
+        ~ExtensionLifetime() { gpu::ReleaseAmdExtensions(value); }
+    } lifetime{ext};
+    std::printf("adapter: %ls\n", ctx.adapter.name.c_str());
+    const auto directory = RepositoryRoot() / "build/reports/m12/chain";
+    std::filesystem::create_directories(directory);
+    const auto initializers = std::span<const uint8_t>(weights).first(kInitializerBytes);
+    constexpr size_t tensorBytes = size_t(960) * 540 * 16;
+    bool ok = true;
+    for (uint32_t fixture = 0; fixture < 3; ++fixture) {
+        std::vector<uint8_t> input(size_t(1920) * 1088 * 16, 0);
+        uint32_t seed = 0x5EED4F12u;
+        for (size_t pixel = 0; pixel < size_t(1920) * 1080; ++pixel) {
+            for (uint32_t c = 0; c < 7; ++c) {
+                seed = seed * 1664525u + 1013904223u;
+                float value = 0.0f;
+                if (fixture == 1 && pixel == size_t(540) * 1920 + 960)
+                    value = c & 1 ? -1.0f : 1.0f;
+                if (fixture == 2)
+                    value = float(int((seed >> 16) % 4095u) - 2047) / 1024.0f;
+                const uint16_t bits = core::F32ToF16(value);
+                memcpy(input.data() + pixel * 16 + c * 2, &bits, 2);
+            }
+        }
+        const auto logicalInput = std::span<const uint8_t>(input).first(size_t(1920) * 1080 * 16);
+        std::vector<uint8_t> output, repeated, boundary, reference0, reference1;
+        std::vector<std::string> isa, repeatedIsa;
+        // The repeat uses the normal path: no intermediate readback at all.
+        if (!RunInputChain(ctx, ext, logicalInput, weights, output, &boundary, isa, error) ||
+            !RunInputChain(ctx, ext, logicalInput, weights, repeated, nullptr, repeatedIsa, error) ||
+            !ReferenceInputChain(ctx, input, initializers, reference0, reference1, error)) {
+            std::fprintf(stderr, "chain fixture %u: %s\n", fixture, error.c_str());
+            return 1;
+        }
+        if (boundary.size() != tensorBytes || output.size() != tensorBytes ||
+            reference0.size() != tensorBytes || reference1.size() != tensorBytes) {
+            std::fprintf(stderr, "chain tensor dimension mismatch\n");
+            return 1;
+        }
+        const bool native = isa.size() == 3 && std::all_of(isa.begin(), isa.end(),
+            [](const std::string& text) {
+                return text.find("v_wmma_i32_16x16x16_iu8") != std::string::npos;
+            });
+        for (uint32_t pass : {0u, 1u}) {
+            const auto& own = pass == 0 ? boundary : output;
+            const auto& ref = pass == 0 ? reference0 : reference1;
+            size_t different = 0;
+            int maxDelta = 0;
+            for (size_t i = 0; i < own.size(); ++i) {
+                if (own[i] != ref[i]) {
+                    ++different;
+                    maxDelta = std::max(maxDelta, std::abs(int(int8_t(own[i])) - int(int8_t(ref[i]))));
+                }
+            }
+            std::printf("chain fixture%u pass%u: %zu/%zu differing bytes | max INT8 delta %d\n",
+                        fixture, pass, different, own.size(), maxDelta);
+            ok = ok && different == 0;
+            if (const char* dump = std::getenv("M12_DUMP"); dump && *dump == '1') {
+                const std::string stem = "fixture" + std::to_string(fixture) + "-pass" + std::to_string(pass);
+                for (const auto& [suffix, data] :
+                     {std::pair<const char*, const std::vector<uint8_t>*>{"-own.bin", &own},
+                      {"-ref.bin", &ref}}) {
+                    std::ofstream file(directory / (stem + suffix), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(data->data()), std::streamsize(data->size()));
+                    if (!file)
+                        return 1;
+                }
+            }
+        }
+        const bool deterministic = output == repeated;
+        std::printf("chain fixture%u: snapshot-free repeat %s | native WMMA %s\n",
+                    fixture, deterministic ? "identical" : "DIFFERENT", native ? "yes" : "NO");
+        ok = ok && deterministic && native;
+    }
+    std::string queueErrors;
+    size_t intrinsicMessages = 0;
+    if (!gpu::InfoQueueCleanWithFilter(ctx, gpu::IsBufferPassWmmaDiagnostic,
+                                      intrinsicMessages, queueErrors)) {
+        std::fprintf(stderr, "%s\n", queueErrors.c_str());
+        return 1;
+    }
+    std::printf("FSR4 GPU-resident 0 -> 1: %s | ten dispatches/submission | "
+                "exact named root4 intrinsic messages %zu | full M12 gate UNVERIFIED\n",
+                ok ? "PASS" : "FAIL", intrinsicMessages);
+    return ok ? 0 : 1;
 }
 
 int RunFsr4Cnb() {

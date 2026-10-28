@@ -49,6 +49,8 @@ int RunFsr4Oracle();
 int RunFsr4Weights();
 int RunFsr4Pass0();
 int RunFsr4Cnb();
+int RunFsr4Chain();
+int RunFsr4Graph();
 int RunFsr4Downscale();
 int RunFsr4Fnb();
 

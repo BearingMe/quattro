@@ -1,4 +1,5 @@
 #include "fsr4_cnb.h"
+#include "fsr4_graph.h"
 #include "fsr4_weights.h"
 #include "gpu/compute.h"
 #include "gpu/graph.h"
@@ -7,22 +8,16 @@
 
 namespace inference::fsr4 {
 
-bool RunConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
-                      uint32_t passIndex, std::span<const uint8_t> input,
-                      std::span<const uint8_t> weights, std::vector<uint8_t>& output,
-                      std::vector<std::string>& convolutionIsa, std::string& error) {
-    output.clear();
-    convolutionIsa.clear();
+bool AppendConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                         DispatchPlan& plan, uint32_t passIndex, size_t input, size_t weights,
+                         size_t& output, std::string& error) {
     constexpr size_t pixels = 960 * 540;
-    if ((passIndex != 1 && passIndex != 2 && passIndex != 12) || input.size() != pixels * 16) {
-        error = "unsupported ConvNextBlock pass or input shape";
+    if (!plan.signature || (passIndex != 1 && passIndex != 2 && passIndex != 12) ||
+        input >= plan.buffers.size() || weights >= plan.buffers.size() || input == weights ||
+        plan.buffers[input].bytes != pixels * 16) {
+        error = "invalid ConvNextBlock dispatch inputs";
         return false;
     }
-    if (!ValidateWeights(weights, error))
-        return false;
-    gpu::ComPtr<ID3D12RootSignature> signature;
-    if (!gpu::CreateBufferPassRootSignature(context, signature, error, true))
-        return false;
     const uint32_t reductions[] = {144, 16, 32};
     const uint32_t features[] = {16, 32, 16};
     size_t packedBytes = 0, accBytes = 0;
@@ -30,13 +25,11 @@ bool RunConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extension
         packedBytes = std::max(packedBytes, pixels * reductions[i] + reductions[i] * features[i] + 1024);
         accBytes = std::max(accBytes, pixels * features[i] * 4);
     }
-    const std::vector<gpu::BufferInit> buffers = {
-        {input.size(), input.data()}, {weights.size(), weights.data()},
+    const size_t workspace = plan.buffers.size();
+    plan.buffers.insert(plan.buffers.end(), {
         {packedBytes, nullptr}, {accBytes, nullptr},
         {pixels * 16, nullptr}, {pixels * 32, nullptr}, {pixels * 16, nullptr}, {4, nullptr},
-    };
-    std::vector<gpu::ComPtr<ID3D12PipelineState>> psos;
-    std::vector<gpu::BufferPass> stages;
+    });
     for (uint32_t conv = 0; conv < 3; ++conv) {
         for (uint32_t step = 0; step < 3; ++step) {
             const std::string name = step == 1
@@ -47,7 +40,7 @@ bool RunConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extension
             if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
                 return false;
             D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-            desc.pRootSignature = signature.Get();
+            desc.pRootSignature = plan.signature.Get();
             desc.CS = {cso.data(), cso.size()};
             gpu::ComPtr<ID3D12PipelineState> pso;
             if (step == 1) {
@@ -58,41 +51,61 @@ bool RunConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extension
                 std::string isa, statsLine;
                 if (!gpu::GetPipelineIsa(extensions, handle, isa, statsLine, error))
                     return false;
-                convolutionIsa.push_back(std::move(isa));
+                plan.convolutionIsa.push_back(std::move(isa));
             } else if (FAILED(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
                 error = "cannot create ConvNextBlock packing/epilogue PSO: " + name;
                 return false;
             }
             gpu::BufferPass stage{};
             stage.pso = pso.Get();
-            stage.srv1 = 1;
-            stage.uav1 = 7;
+            stage.srv1 = weights;
+            stage.uav1 = workspace + 5;
             if (step == 0) {
-                stage.srv0 = conv == 0 ? 0 : conv == 1 ? 4 : 5;
-                stage.uav0 = 2;
+                stage.srv0 = conv == 0 ? input : conv == 1 ? workspace + 2 : workspace + 3;
+                stage.uav0 = workspace;
                 const size_t words = (pixels * reductions[conv] + reductions[conv] * features[conv] + 1024) / 4;
                 stage.gridX = 4096;
                 stage.gridY = uint32_t((words + 4096 * 64 - 1) / (4096 * 64));
             } else if (step == 1) {
-                stage.srv0 = 2;
-                stage.uav0 = 3;
+                stage.srv0 = workspace;
+                stage.uav0 = workspace + 1;
                 stage.gridX = features[conv] / 16;
                 stage.gridY = uint32_t(pixels / 16);
             } else {
-                stage.srv0 = 3;
-                stage.uav0 = conv == 0 ? 4 : conv == 1 ? 5 : 6;
-                stage.uav1 = conv == 2 ? 0 : 7;
+                stage.srv0 = workspace + 1;
+                stage.uav0 = conv == 0 ? workspace + 2 : conv == 1 ? workspace + 3 : workspace + 4;
+                stage.uav1 = conv == 2 ? input : workspace + 5;
                 stage.gridX = 4096;
                 stage.gridY = uint32_t((pixels + 4096 * 64 - 1) / (4096 * 64));
             }
-            psos.push_back(pso);
-            stages.push_back(stage);
+            plan.psos.push_back(pso);
+            plan.passes.push_back(stage);
         }
     }
+    output = workspace + 4;
+    return true;
+}
+
+bool RunConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                      uint32_t passIndex, std::span<const uint8_t> input,
+                      std::span<const uint8_t> weights, std::vector<uint8_t>& output,
+                      std::vector<std::string>& convolutionIsa, std::string& error) {
+    output.clear();
+    convolutionIsa.clear();
+    if (!ValidateWeights(weights, error))
+        return false;
+    DispatchPlan plan;
+    if (!gpu::CreateBufferPassRootSignature(context, plan.signature, error, true))
+        return false;
+    plan.buffers = {{input.size(), input.data()}, {weights.size(), weights.data()}};
+    size_t destination = 0;
+    if (!AppendConvNextBlock(context, extensions, plan, passIndex, 0, 1, destination, error))
+        return false;
+    convolutionIsa = std::move(plan.convolutionIsa);
     std::vector<std::vector<uint8_t>> snapshots;
-    return gpu::RunBufferPasses(context, signature, buffers, stages, 6,
-                                std::vector<bool>(stages.size(), false), snapshots,
-                                6, pixels * 16, output, error, true);
+    return gpu::RunBufferPasses(context, plan.signature, plan.buffers, plan.passes, destination,
+                                std::vector<bool>(plan.passes.size(), false), snapshots,
+                                destination, size_t(960) * 540 * 16, output, error, true);
 }
 
 } // namespace inference::fsr4

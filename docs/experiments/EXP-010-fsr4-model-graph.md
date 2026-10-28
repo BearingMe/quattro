@@ -140,3 +140,13 @@ marks their report provenance as unverified; it cannot be used for collection.
 - `CMakeLists.txt` (reference CSO rules, `experiment_fsr4_oracle` test)
 - `docs/findings/2026-10-27-fsr4-v07-graph.md`
 
+## Addendum: M12 integration gate
+
+[M] [EXP-016](EXP-016-fsr4-resident-graph.md) completes the formerly open
+C06–C09 work: our independent 14-pass graph runs GPU-resident and matches every
+logical boundary of the labelled predication control exactly on three fixtures,
+in Debug and Release. Shipped differences are recorded separately and confined
+to the documented corruption bands. The original reference-only results above
+remain unchanged; the gate is passed by the independent reproduction, not by
+this oracle smoke test.
+

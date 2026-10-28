@@ -750,10 +750,16 @@ No FSR 4-specific model implementation yet.
 
 ### M12 — FSR 4 Model Reproduction
 
-**Status:** ◐ in progress — C01–C05 have evidence. All 14 passes
-(0–13) now have an independent, byte-exact reproduction, so C04 is evidenced;
-C06–C09 remain incomplete and the gate is **UNVERIFIED**: the passes are
-validated individually, not yet executed as one GPU-resident graph. See
+**Status:** ✓ complete — **M12 gate PASS** on gfx1101, 2026-10-28.
+C01–C09 have evidence. All 14 independent passes execute GPU-resident in one
+submission, with every logical boundary byte-exact on three fixtures against
+the **labelled pass-11 predication-control graph**. Differences against the
+unmodified raced reference are separately measured, not hidden or tolerated.
+Debug **22/22 PASS (1750.60 s)**; Release **22/22 PASS (1866.75 s)**.
+Gate evidence: [EXP-016](experiments/EXP-016-fsr4-resident-graph.md).
+Before further integration work, read the
+[blocker-prevention finding](findings/2026-10-28-fsr4-integration-blockers.md).
+Historical incremental evidence below retains its original scope/status. See
 [`experiments/EXP-010-fsr4-model-graph.md`](experiments/EXP-010-fsr4-model-graph.md)
 and [`findings/2026-10-27-fsr4-v07-graph.md`](findings/2026-10-27-fsr4-v07-graph.md).
 Operator/weight evidence:
@@ -810,6 +816,27 @@ C04 is evidenced. What remains for the gate is integration: C07 (GPU-resident
 full graph) and C08/C09 (per-pass and end-to-end comparison).
 Debug and Release CTest both **20/20 PASS** (782.62 s / 771.07 s) at this state.
 
+[M] GPU-resident integration checkpoint (2026-10-28,
+[EXP-015](experiments/EXP-015-fsr4-resident-chain.md)): passes 0 -> 1 execute in
+one submission (ten dispatches), with separate live resources and unchanged
+shaders/aliasing checks. Both logical boundaries match the shipped two-pass
+reference chain: **0/8,294,400 differing bytes** on each of three fixtures;
+snapshot-free repeats identical, native WMMA confirmed. The earlier single-
+scratch aliasing obstacle is bypassed, not waived. C06/C07 remain partial and
+C08/C09 remain incomplete for the full graph; **M12 gate UNVERIFIED**.
+
+[M] Full integration (EXP-016, supersedes the partial statuses above): all 14
+model boundaries are exact on zero, impulse and deterministic-feature fixtures;
+snapshot-free repeats identical, 11/11 native WMMA convolutions confirmed.
+All 16,588,800 final FP16 halfwords are finite. Deterministic-feature output
+SHA-256 matches EXP-010's independent control:
+`a57bcd063967affddf29cc24709b9d8a7fd9f8e7244e7010521d7b27f605b6de`.
+Unmodified shipped differences occur only in x<64 / x<66 / x<132 at passes
+11/12/13; exact byte/halfword counts and deltas are recorded in EXP-016.
+C06–C09 and all gate items below are evidenced. **Stop here: M13 is not
+authorized by completing M12.** No signed-runtime, temporal, visual-quality,
+performance, alternate-resolution or FSR 4.1 equivalence claim.
+
 #### Objective
 
 Reproduce the selected FSR 4 INT8 network's execution graph as closely as available evidence permits.
@@ -840,22 +867,22 @@ Use a fixed version of the model as the reference. Do not silently mix different
 - [x] C03: Reproduce the known execution graph.
 - [x] C04: Implement required missing operations.
 - [x] C05: Load the available model weights.
-- [ ] C06: Validate intermediate tensor dimensions.
-- [ ] C07: Execute the complete graph.
-- [ ] C08: Compare against an available reference.
-- [ ] C09: Record numerical differences.
+- [x] C06: Validate intermediate tensor dimensions.
+- [x] C07: Execute the complete graph.
+- [x] C08: Compare against an available reference.
+- [x] C09: Record numerical differences.
 
 #### Validation Gate
 
-- [ ] Selected model version is documented.
-- [ ] Every required layer is accounted for.
-- [ ] Model weights are loaded correctly.
-- [ ] Quantization metadata is applied.
-- [ ] Complete graph executes.
-- [ ] Intermediate tensor dimensions are valid.
-- [ ] Output contains finite, inspectable values.
-- [ ] Numerical comparison is performed where a reference is available.
-- [ ] Missing or approximated behavior is explicitly documented.
+- [x] Selected model version is documented.
+- [x] Every required layer is accounted for.
+- [x] Model weights are loaded correctly.
+- [x] Quantization metadata is applied.
+- [x] Complete graph executes.
+- [x] Intermediate tensor dimensions are valid.
+- [x] Output contains finite, inspectable values.
+- [x] Numerical comparison is performed where a reference is available.
+- [x] Missing or approximated behavior is explicitly documented.
 
 #### Deliverables
 

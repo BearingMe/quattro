@@ -1,4 +1,5 @@
 #include "fsr4_downscale.h"
+#include "fsr4_graph.h"
 #include "fsr4_weights.h"
 #include "gpu/compute.h"
 #include "gpu/graph.h"
@@ -19,46 +20,34 @@ bool DownscaleGeometryForPass(uint32_t pass, DownscaleGeometry& geometry) {
     return false;
 }
 
-bool RunDownscaleConvolution(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
-                             uint32_t pass, std::span<const uint8_t> input,
-                             std::span<const uint8_t> weights, std::vector<uint8_t>& output,
-                             std::string& isa, std::string& error) {
-    output.clear();
-    isa.clear();
+bool AppendDownscale(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                      DispatchPlan& plan, uint32_t pass, size_t input, size_t weights,
+                      size_t& output, std::string& error) {
     DownscaleGeometry shape{};
     if (!DownscaleGeometryForPass(pass, shape)) {
         error = "unsupported downscale convolution pass";
         return false;
     }
-    if (input.size() != size_t(shape.inputPixels) * shape.inputChannels) {
+    if (!plan.signature || input >= plan.buffers.size() || weights >= plan.buffers.size() ||
+        input == weights || plan.buffers[input].bytes != size_t(shape.inputPixels) * shape.inputChannels) {
         error = "unsupported downscale convolution input shape";
         return false;
     }
-    if (!ValidateWeights(weights, error))
-        return false;
     if (shape.pixels % 16 != 0 || shape.features % 16 != 0 || shape.reduction % 16 != 0) {
         error = "downscale convolution shape is not WMMA tile aligned";
         return false;
     }
 
-    gpu::ComPtr<ID3D12RootSignature> signature;
-    if (!gpu::CreateBufferPassRootSignature(context, signature, error, true))
-        return false;
-
     const std::string prefix = "m12/ds" + std::to_string(pass);
     const size_t packedBytes =
         size_t(shape.pixels) * shape.reduction + size_t(shape.reduction) * shape.features + 1024;
-    const std::vector<gpu::BufferInit> buffers = {
-        {input.size(), input.data()},   // 0: source tensor
-        {weights.size(), weights.data()}, // 1: checked payload (weights + FP16 bias)
+    const size_t workspace = plan.buffers.size();
+    plan.buffers.insert(plan.buffers.end(), {
         {packedBytes, nullptr},         // 2: [A: pixels*K | B: K*features | zero tile]
         {size_t(shape.pixels) * shape.features * 4, nullptr}, // 3: INT32 accumulators
         {size_t(shape.pixels) * shape.features, nullptr},      // 4: INT8 output
         {4, nullptr},                   // 5: bound-but-unused second UAV slot
-    };
-
-    std::vector<gpu::ComPtr<ID3D12PipelineState>> psos;
-    std::vector<gpu::BufferPass> stages;
+    });
     const char* steps[] = {"pack", "raw", "post"};
     for (uint32_t step = 0; step < 3; ++step) {
         std::vector<uint8_t> cso;
@@ -66,7 +55,7 @@ bool RunDownscaleConvolution(gpu::DeviceContext& context, gpu::AmdExtensions& ex
         if (!gpu::LoadShaderBytecode(name.c_str(), cso, error))
             return false;
         D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = signature.Get();
+        desc.pRootSignature = plan.signature.Get();
         desc.CS = {cso.data(), cso.size()};
         gpu::ComPtr<ID3D12PipelineState> pso;
         if (step == 1) {
@@ -74,9 +63,10 @@ bool RunDownscaleConvolution(gpu::DeviceContext& context, gpu::AmdExtensions& ex
             AmdExtD3DComputeShaderStats stats{};
             if (!gpu::CreateAnalyzedComputePipeline(extensions, desc, pso, handle, stats, error))
                 return false;
-            std::string statsLine;
+            std::string isa, statsLine;
             if (!gpu::GetPipelineIsa(extensions, handle, isa, statsLine, error))
                 return false;
+            plan.convolutionIsa.push_back(std::move(isa));
         } else if (FAILED(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
             error = "cannot create downscale convolution PSO: " + name;
             return false;
@@ -84,33 +74,53 @@ bool RunDownscaleConvolution(gpu::DeviceContext& context, gpu::AmdExtensions& ex
 
         gpu::BufferPass stage{};
         stage.pso = pso.Get();
-        stage.srv1 = 1;
-        stage.uav1 = 5;
+        stage.srv1 = weights;
+        stage.uav1 = workspace + 3;
         if (step == 0) {
-            stage.srv0 = 0;
-            stage.uav0 = 2;
+            stage.srv0 = input;
+            stage.uav0 = workspace;
             const size_t words = packedBytes / 4;
             stage.gridX = 4096;
             stage.gridY = uint32_t((words + 4096 * 64 - 1) / (4096 * 64));
         } else if (step == 1) {
-            stage.srv0 = 2;
-            stage.uav0 = 3;
+            stage.srv0 = workspace;
+            stage.uav0 = workspace + 1;
             stage.gridX = shape.features / 16;
             stage.gridY = shape.pixels / 16;
         } else {
-            stage.srv0 = 3;
-            stage.uav0 = 4;
+            stage.srv0 = workspace + 1;
+            stage.uav0 = workspace + 2;
             stage.gridX = 4096;
             stage.gridY = uint32_t((shape.pixels + 4096 * 64 - 1) / (4096 * 64));
         }
-        psos.push_back(pso);
-        stages.push_back(stage);
+        plan.psos.push_back(pso);
+        plan.passes.push_back(stage);
     }
 
+    output = workspace + 2;
+    return true;
+}
+
+bool RunDownscaleConvolution(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                             uint32_t pass, std::span<const uint8_t> input,
+                             std::span<const uint8_t> weights, std::vector<uint8_t>& output,
+                             std::string& isa, std::string& error) {
+    output.clear();
+    isa.clear();
+    if (!ValidateWeights(weights, error))
+        return false;
+    DispatchPlan plan;
+    if (!gpu::CreateBufferPassRootSignature(context, plan.signature, error, true))
+        return false;
+    plan.buffers = {{input.size(), input.data()}, {weights.size(), weights.data()}};
+    size_t destination = 0;
+    if (!AppendDownscale(context, extensions, plan, pass, 0, 1, destination, error))
+        return false;
+    isa = plan.convolutionIsa.front();
     std::vector<std::vector<uint8_t>> snapshots;
-    return gpu::RunBufferPasses(context, signature, buffers, stages, 5,
-                                std::vector<bool>(stages.size(), false), snapshots, 4,
-                                size_t(shape.pixels) * shape.features, output, error, true);
+    return gpu::RunBufferPasses(context, plan.signature, plan.buffers, plan.passes, destination,
+                                std::vector<bool>(plan.passes.size(), false), snapshots, destination,
+                                plan.buffers[destination].bytes, output, error, true);
 }
 
 } // namespace inference::fsr4

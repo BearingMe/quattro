@@ -1,9 +1,46 @@
 #include "fsr4_pass0.h"
+#include "fsr4_graph.h"
 #include "fsr4_weights.h"
 #include "gpu/compute.h"
 #include "gpu/graph.h"
 
 namespace inference::fsr4 {
+
+bool AppendInputConvolution(gpu::DeviceContext& context, DispatchPlan& plan,
+                            size_t input, size_t weights, size_t& output,
+                            std::string& error) {
+    if (!plan.signature || input >= plan.buffers.size() || weights >= plan.buffers.size() ||
+        input == weights || plan.buffers[input].bytes != size_t(1920) * 1080 * 16) {
+        error = "invalid input convolution dispatch inputs";
+        return false;
+    }
+    const size_t destination = plan.buffers.size();
+    plan.buffers.push_back({size_t(960) * 540 * 16, nullptr});
+    const size_t unused = plan.buffers.size();
+    plan.buffers.push_back({4, nullptr});
+    std::vector<uint8_t> bytecode;
+    if (!gpu::LoadShaderBytecode("m12/pass0", bytecode, error))
+        return false;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = plan.signature.Get();
+    desc.CS = {bytecode.data(), bytecode.size()};
+    gpu::ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
+        error = "cannot create FSR4 input convolution PSO";
+        return false;
+    }
+    gpu::BufferPass stage{};
+    stage.pso = pso.Get();
+    stage.gridX = (960 * 540 + 63) / 64;
+    stage.srv0 = input;
+    stage.srv1 = weights;
+    stage.uav0 = destination;
+    stage.uav1 = unused;
+    plan.psos.push_back(pso);
+    plan.passes.push_back(stage);
+    output = destination;
+    return true;
+}
 
 bool RunInputConvolution(gpu::DeviceContext& context, std::span<const uint8_t> input,
                          std::span<const uint8_t> weights, std::vector<uint8_t>& output,
@@ -17,34 +54,19 @@ bool RunInputConvolution(gpu::DeviceContext& context, std::span<const uint8_t> i
     }
     if (!ValidateWeights(weights, error))
         return false;
-    gpu::ComPtr<ID3D12RootSignature> signature;
-    if (!gpu::CreateBufferPassRootSignature(context, signature, error))
+    DispatchPlan plan;
+    if (!gpu::CreateBufferPassRootSignature(context, plan.signature, error))
         return false;
-    std::vector<uint8_t> bytecode;
-    if (!gpu::LoadShaderBytecode("m12/pass0", bytecode, error))
-        return false;
-    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-    desc.pRootSignature = signature.Get();
-    desc.CS = {bytecode.data(), bytecode.size()};
-    gpu::ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
-        error = "cannot create FSR4 input convolution PSO";
-        return false;
-    }
-    const std::vector<gpu::BufferInit> buffers = {
+    plan.buffers = {
         {input.size(), input.data()}, {weights.size(), weights.data()},
-        {outputBytes, nullptr}, {4, nullptr},
     };
-    gpu::BufferPass pass{};
-    pass.pso = pso.Get();
-    pass.gridX = (960 * 540 + 63) / 64;
-    pass.srv0 = 0;
-    pass.srv1 = 1;
-    pass.uav0 = 2;
-    pass.uav1 = 3;
+    size_t destination = 0;
+    if (!AppendInputConvolution(context, plan, 0, 1, destination, error))
+        return false;
     std::vector<std::vector<uint8_t>> snapshots;
-    return gpu::RunBufferPasses(context, signature, buffers, {pass}, 3, {false},
-                                snapshots, 2, outputBytes, output, error);
+    return gpu::RunBufferPasses(context, plan.signature, plan.buffers, plan.passes,
+                                destination, {false}, snapshots, destination,
+                                outputBytes, output, error);
 }
 
 } // namespace inference::fsr4

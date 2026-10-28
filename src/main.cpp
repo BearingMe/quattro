@@ -38,6 +38,8 @@ const std::vector<Experiment>& experiments() {
         {"fsr4-weights", "M12 checked model weight loading and corruption rejection", &experiments::RunFsr4Weights},
         {"fsr4-pass0", "M12 our input convolution vs reference (1/14 passes, not the gate)", &experiments::RunFsr4Pass0},
         {"fsr4-cnb", "M12 our native WMMA ConvNextBlocks vs isolated reference passes", &experiments::RunFsr4Cnb},
+        {"fsr4-chain", "M12 GPU-resident passes 0 -> 1 vs shipped reference chain (not full graph)", &experiments::RunFsr4Chain},
+        {"fsr4-graph", "M12 GPU-resident 14-pass reproduction vs predication control and shipped graph", &experiments::RunFsr4Graph},
         {"fsr4-downscale", "M12 our quantized downscale convolutions (passes 3/6) vs isolated reference passes", &experiments::RunFsr4Downscale},
         {"fsr4-fnb", "M12 our FasterNetBlocks (passes 4/5/7/8/10) vs isolated reference passes", &experiments::RunFsr4Fnb},
 #endif

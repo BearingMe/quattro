@@ -29,6 +29,14 @@ bool CreateBufferPassRootSignature(DeviceContext& ctx,
 // named 16-byte dummy UAV at root4. Never exempts tensor/weight accesses.
 bool IsBufferPassWmmaDiagnostic(const D3D12_MESSAGE& message);
 
+struct BufferCopy {
+    size_t source = 0;
+    size_t destination = 0;
+    size_t sourceOffset = 0;
+    size_t destinationOffset = 0;
+    size_t bytes = 0;
+};
+
 struct BufferPass {
     ID3D12PipelineState* pso = nullptr;
     uint32_t gridX = 1;
@@ -38,6 +46,12 @@ struct BufferPass {
     size_t srv1 = 0; // t1
     size_t uav0 = 0; // u0
     size_t uav1 = 0; // u1
+    // GPU-only copies before this dispatch (e.g. assembling a packed input).
+    // Same-resource copies are deliberately unsupported. Bounds checked first.
+    std::vector<BufferCopy> copiesBefore;
+    // SIZE_MAX uses RunBufferPasses' default; otherwise snapshot this resource
+    // when snapshotAfter is set. No readback ever becomes a dispatch input.
+    size_t snapshotBuffer = SIZE_MAX;
 };
 
 struct BufferInit {
@@ -46,7 +60,7 @@ struct BufferInit {
 };
 
 // Runs `passes` in order. After pass `i`, if `snapshotAfter[i]` is true, the
-// whole of `snapshotBuffer` is copied to a readback and appended to
+// whole of `snapshotBuffer` (or the pass override) is copied to a readback and appended to
 // `snapshots`. Finally the first `outputBytes` of `outputBuffer` are read back.
 // SRVs may alias each other, but no SRV may alias a UAV and the UAVs must be
 // distinct. Unsupported aliasing is rejected before recording any dispatch.

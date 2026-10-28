@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <sstream>
+#include <utility>
 
 #pragma comment(lib, "d3d12.lib")
 
@@ -92,6 +93,21 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
             error = "invalid buffer pass " + std::to_string(i);
             return false;
         }
+        if (p.snapshotBuffer != SIZE_MAX && p.snapshotBuffer >= buffers.size()) {
+            error = "invalid snapshot buffer at pass " + std::to_string(i);
+            return false;
+        }
+        for (const BufferCopy& copy : p.copiesBefore) {
+            if (copy.source >= buffers.size() || copy.destination >= buffers.size() ||
+                copy.source == copy.destination || copy.bytes == 0 ||
+                copy.sourceOffset > buffers[copy.source].bytes ||
+                copy.bytes > buffers[copy.source].bytes - copy.sourceOffset ||
+                copy.destinationOffset > buffers[copy.destination].bytes ||
+                copy.bytes > buffers[copy.destination].bytes - copy.destinationOffset) {
+                error = "invalid buffer copy at pass " + std::to_string(i);
+                return false;
+            }
+        }
     }
 
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -154,9 +170,15 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     for (bool s : snapshotAfter)
         snapshotCount += s ? 1 : 0;
     std::vector<ComPtr<ID3D12Resource>> snapshotRb(snapshotCount);
+    std::vector<size_t> snapshotBuffers;
+    for (size_t i = 0; i < passes.size(); ++i) {
+        if (snapshotAfter[i])
+            snapshotBuffers.push_back(passes[i].snapshotBuffer == SIZE_MAX
+                ? snapshotBuffer : passes[i].snapshotBuffer);
+    }
     for (size_t i = 0; i < snapshotCount; ++i) {
         const D3D12_RESOURCE_DESC desc =
-            BufferDesc(buffers[snapshotBuffer].bytes, D3D12_RESOURCE_FLAG_NONE);
+            BufferDesc(buffers[snapshotBuffers[i]].bytes, D3D12_RESOURCE_FLAG_NONE);
         if (FAILED(ctx.device->CreateCommittedResource(
                 &readbackHeap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&snapshotRb[i])))) {
@@ -205,6 +227,20 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     size_t snapIndex = 0;
     for (size_t i = 0; i < passes.size(); ++i) {
         const BufferPass& p = passes[i];
+        for (const BufferCopy& copy : p.copiesBefore) {
+            D3D12_RESOURCE_BARRIER barriers[] = {
+                TransitionBarrier(buf[copy.source].Get(), D3D12_RESOURCE_STATE_COMMON,
+                                  D3D12_RESOURCE_STATE_COPY_SOURCE),
+                TransitionBarrier(buf[copy.destination].Get(), D3D12_RESOURCE_STATE_COMMON,
+                                  D3D12_RESOURCE_STATE_COPY_DEST),
+            };
+            list->ResourceBarrier(2, barriers);
+            list->CopyBufferRegion(buf[copy.destination].Get(), copy.destinationOffset,
+                                   buf[copy.source].Get(), copy.sourceOffset, copy.bytes);
+            for (auto& barrier : barriers)
+                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+            list->ResourceBarrier(2, barriers);
+        }
         D3D12_RESOURCE_BARRIER transitions[4];
         uint32_t count = 0;
         transitions[count++] = TransitionBarrier(buf[p.srv0].Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -250,15 +286,16 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         list->ResourceBarrier(count, transitions);
 
         if (snapshotAfter[i]) {
+            const size_t selected = snapshotBuffers[snapIndex];
             const D3D12_RESOURCE_BARRIER toCopy = TransitionBarrier(
-                buf[snapshotBuffer].Get(), D3D12_RESOURCE_STATE_COMMON,
+                buf[selected].Get(), D3D12_RESOURCE_STATE_COMMON,
                 D3D12_RESOURCE_STATE_COPY_SOURCE);
             list->ResourceBarrier(1, &toCopy);
             list->CopyBufferRegion(snapshotRb[snapIndex].Get(), 0,
-                                   buf[snapshotBuffer].Get(), 0,
-                                   buffers[snapshotBuffer].bytes);
+                                   buf[selected].Get(), 0,
+                                   buffers[selected].bytes);
             const D3D12_RESOURCE_BARRIER toCommon = TransitionBarrier(
-                buf[snapshotBuffer].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                buf[selected].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_COMMON);
             list->ResourceBarrier(1, &toCommon);
             ++snapIndex;
@@ -313,7 +350,7 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
             return false;
         }
         snapshots[i].assign(static_cast<const uint8_t*>(raw),
-                            static_cast<const uint8_t*>(raw) + buffers[snapshotBuffer].bytes);
+                            static_cast<const uint8_t*>(raw) + buffers[snapshotBuffers[i]].bytes);
         snapshotRb[i]->Unmap(0, nullptr);
     }
     void* rawOut = nullptr;
