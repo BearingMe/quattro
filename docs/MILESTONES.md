@@ -979,7 +979,22 @@ Visual artifacts are acceptable during initial execution. Crashes, undefined beh
 
 ### M14 — Quality and Numerical Analysis
 
-**Status:** ☐ proposed
+**Status:** ✓ complete — **M14 analysis gate PASS** for the bounded synthetic
+static-jitter and moving/reset sequences, with an explicitly **cross-version**
+official 4.1.2 reference and experimental 4.0.2 pipeline. Identical input bytes
+are verified; images, raw error metrics, edge/interior categories, short-window
+temporal residuals, overshoot and reset equality are recorded in
+[EXP-018](experiments/EXP-018-fsr4-image-comparison.md).
+More than 99.9% of squared RGB difference occurs in the predefined edge mask;
+large local maxima are reported alongside global PSNR. No isolated INT8-error,
+same-model equivalence, long-sequence stability or real-game quality claim.
+
+[M] Both local DLL bundles report/select provider **4.1.2**, including the DLL
+under `FSR-4.0.2-reference`; no 4.0.2 provider was enumerated on gfx1101. Runtime
+version is checked by API, never inferred from the folder. Release CTest
+**24/24 PASS (2035.72 s)**; the later Debug attempt was interrupted and is
+**incomplete**, not a pass. Finer causal separation of closed-model/version,
+sampler precision and quantization remains unverified and is not fabricated.
 
 #### Objective
 
@@ -1006,24 +1021,24 @@ Investigate:
 
 #### Checkpoints
 
-- [ ] C01: Establish identical input sequences where possible.
-- [ ] C02: Capture official reference output.
-- [ ] C03: Capture experimental output.
-- [ ] C04: Compare static scenes.
-- [ ] C05: Compare moving scenes.
-- [ ] C06: Evaluate frame-to-frame stability.
-- [ ] C07: Quantify numerical differences.
-- [ ] C08: Identify dominant error sources.
+- [x] C01: Establish identical input sequences where possible.
+- [x] C02: Capture official reference output.
+- [x] C03: Capture experimental output.
+- [x] C04: Compare static scenes.
+- [x] C05: Compare moving scenes.
+- [x] C06: Evaluate frame-to-frame stability.
+- [x] C07: Quantify numerical differences.
+- [x] C08: Identify dominant error sources (observed edge/reconstruction/temporal category; finer attribution unverified).
 
 #### Validation Gate
 
-- [ ] Comparable input sequences are available.
-- [ ] Reference and experimental outputs are captured.
-- [ ] Image comparison methodology is documented.
-- [ ] Numerical differences are measured.
-- [ ] Temporal behavior is evaluated.
-- [ ] Dominant visible artifacts are categorized.
-- [ ] Unsupported claims of numerical equivalence are avoided.
+- [x] Comparable input sequences are available.
+- [x] Reference and experimental outputs are captured.
+- [x] Image comparison methodology is documented.
+- [x] Numerical differences are measured.
+- [x] Temporal behavior is evaluated.
+- [x] Dominant visible artifacts are categorized.
+- [x] Unsupported claims of numerical equivalence are avoided.
 
 #### Deliverables
 

@@ -50,6 +50,14 @@ int RunFsr4Temporal() {
     using namespace inference::fsr4;
     setvbuf(stdout, nullptr, _IONBF, 0);
     std::string error;
+    const char* sequenceEnv = std::getenv("M13_SEQUENCE");
+    const std::string sequence = sequenceEnv ? sequenceEnv : "moving-reset";
+    if (sequence != "moving-reset" && sequence != "static") {
+        std::fprintf(stderr, "M13_SEQUENCE must be moving-reset or static\n");
+        return 2;
+    }
+    const bool staticSequence = sequence == "static";
+    std::printf("sequence: %s\n", sequence.c_str());
     const char* requestedId = std::getenv("M13_RUN_ID");
     const std::string runId = requestedId ? requestedId :
         "run-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
@@ -67,18 +75,18 @@ int RunFsr4Temporal() {
     }
     std::printf("temporal captures: %ls\n", directory.c_str());
     std::vector<TemporalFrame> frames(3);
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < 3; ++i) {
         auto& frame = frames[i];
         auto& c = frame.constants;
         c.frame = i;
         c.reset = i == 0;
-        c.jitter[0] = i == 0 ? 0.25f : -0.25f;
+        c.jitter[0] = i % 2 == 0 ? 0.25f : -0.25f;
         c.jitter[1] = -c.jitter[0];
         frame.pixels.resize(size_t(1280) * 720);
         for (uint32_t y = 0; y < 720; ++y) {
             for (uint32_t x = 0; x < 1280; ++x) {
                 auto& p = frame.pixels[size_t(y) * 1280 + x];
-                const float px = float(x) - c.jitter[0] - float(i);
+                const float px = float(x) - c.jitter[0] - (staticSequence ? 0.0f : float(i));
                 const float py = float(y) - c.jitter[1];
                 const bool foreground = px >= 480 && px < 800 && py >= 240 && py < 480;
                 const bool checker = (int(std::floor(px / 16)) + int(std::floor(py / 16))) & 1;
@@ -86,17 +94,19 @@ int RunFsr4Temporal() {
                 p.color[1] = foreground ? 0.3f : 0.1f + 0.4f * float(y) / 720;
                 p.color[2] = foreground ? 0.05f : 0.1f + 0.4f * float(x) / 1280;
                 p.depth = foreground ? 0.8f : 0.2f;
-                p.motion[0] = i == 0 ? 0.0f : -1.0f;
+                p.motion[0] = staticSequence || i == 0 ? 0.0f : -1.0f;
                 p.motion[1] = 0;
-                if (i == 1 && x >= 624 && x < 656 && y >= 344 && y < 376)
+                if (!staticSequence && i == 1 && x >= 624 && x < 656 && y >= 344 && y < 376)
                     p.motion[0] = std::numeric_limits<float>::quiet_NaN();
             }
         }
     }
     // A camera cut back to the initial scene with a dirty previous history.
     // Identical input/settings must reproduce frame0 exactly despite frame1.
-    frames[2] = frames[0];
-    frames[2].constants.frame = 2;
+    if (!staticSequence) {
+        frames[2] = frames[0];
+        frames[2].constants.frame = 2;
+    }
     bool rejected = true;
     std::vector<TemporalFrame> empty;
     rejected &= !ValidateTemporalFrames(empty, error);
@@ -207,9 +217,13 @@ int RunFsr4Temporal() {
         invalidMotionReset &= HalfAt(result.features[1], center * 16 + 6 + c * 2) == 0xBC00;
     const bool resetIdentical = result.frames[0] == result.frames[2] && result.features[0] == result.features[2];
     const bool historyUsed = result.features[1] != result.features[0];
-    std::printf("camera-cut reset equals clean initial frame: %s | continued features changed: %s | NaN-motion local invalidation: %s\n",
-                resetIdentical ? "yes" : "NO", historyUsed ? "yes" : "NO", invalidMotionReset ? "yes" : "NO");
-    ok = ok && resetIdentical && historyUsed && invalidMotionReset;
+    if (staticSequence)
+        std::printf("static scene: continued features changed %s | camera-cut/NaN-motion cases belong to moving-reset test\n",
+                    historyUsed ? "yes" : "NO");
+    else
+        std::printf("camera-cut reset equals clean initial frame: %s | continued features changed: %s | NaN-motion local invalidation: %s\n",
+                    resetIdentical ? "yes" : "NO", historyUsed ? "yes" : "NO", invalidMotionReset ? "yes" : "NO");
+    ok = ok && historyUsed && (staticSequence || (resetIdentical && invalidMotionReset));
     std::string queueErrors;
     size_t intrinsicMessages = 0;
     if (!gpu::InfoQueueCleanWithFilter(ctx, gpu::IsBufferPassWmmaDiagnostic, intrinsicMessages, queueErrors)) {

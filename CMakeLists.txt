@@ -461,6 +461,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     target_sources(rdna3-int8 PRIVATE
         src/inference/models/fsr4_temporal.cpp
         src/experiments/fsr4_temporal.cpp
+        src/experiments/fsr4_reference_probe.cpp
         src/inference/models/fsr4_weights.cpp
         src/inference/models/fsr4_pass0.cpp
         src/inference/models/fsr4_graph.cpp
@@ -554,6 +555,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     add_test(NAME experiment_fsr4_chain COMMAND rdna3-int8 run fsr4-chain)
     add_test(NAME experiment_fsr4_graph COMMAND rdna3-int8 run fsr4-graph)
     add_test(NAME experiment_fsr4_temporal COMMAND rdna3-int8 run fsr4-temporal)
+    set_tests_properties(experiment_fsr4_temporal PROPERTIES ENVIRONMENT "M13_SEQUENCE=moving-reset")
     set_tests_properties(experiment_fsr4_graph PROPERTIES ENVIRONMENT "M12_LAST_PASS=13")
     add_test(NAME experiment_fsr4_downscale COMMAND rdna3-int8 run fsr4-downscale)
     add_test(NAME experiment_fsr4_fnb COMMAND rdna3-int8 run fsr4-fnb)
@@ -563,5 +565,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
         ${PROJECT_SOURCE_DIR}/scripts/m12_validate_graph.py)
     add_test(NAME m12_capture_integrity COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/scripts/m12_test_capture.py)
+    add_test(NAME m14_image_metrics COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/scripts/m14_test_metrics.py)
 endif()
 

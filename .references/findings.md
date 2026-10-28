@@ -81,3 +81,9 @@ Discoveries that influence engineering decisions. One entry per finding: observa
 - **Decision:** [S] Use the pinned v07 pre/post contract for the explicitly selected linear/manual-exposure/LR-motion/inverted-depth/no-RCAS experiment. Keep all learned reconstruction and recurrent activation, and reject unsupported modes rather than substituting RGB output or zero history.
 - **Evidence:** [S/M] [Temporal contract](../docs/findings/2026-10-28-fsr4-temporal-contract.md) and [EXP-017](../docs/experiments/EXP-017-fsr4-temporal-pipeline.md): GPU-resident three-frame execution/reset/invalidation, Debug/Release regressions, inspectable captures and stage timestamps.
 - **Implication:** M12 raw-tensor exactness does not establish real-image equivalence. The seven inputs are current/history luminance, chroma distance and four recurrent channels; the eight outputs are learned filter parameters and recurrence. Software bilinear precision, signed-runtime version differences and temporal image quality must be measured in M14, not silently assumed from an M13 execution pass.
+
+## F12 — Runtime version must be queried, not inferred from the source directory
+
+- **Observation:** [M] Both signed DLL bundles, including the one under `FSR-4.0.2-reference`, select provider 4.1.2 on this gfx1101 setup. The public API exposes no 4.0.2 provider in either enumeration. No binary was patched or capability check disabled.
+- **Evidence:** [EXP-018](../docs/experiments/EXP-018-fsr4-image-comparison.md), `fsr4-reference-probe` and explicitly overridden/verified provider ID `0xf5a5ca1e81001002` in the same-input image collector.
+- **Implication:** These official/experimental comparisons are cross-version. Report edge/temporal differences and the quantization/sampler/model-version confound; never relabel them as isolated INT8 error or same-model equivalence. Retain exact serialized input bytes and use raw linear RGB, not the existing differently rendered M03 screenshot.
