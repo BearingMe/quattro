@@ -5,6 +5,7 @@
 #include "inference/models/fsr4_cnb.h"
 #include "inference/models/fsr4_downscale.h"
 #include "inference/models/fsr4_fnb.h"
+#include "inference/models/fsr4_cnb_ct2d.h"
 #include "inference/models/fsr4_weights.h"
 #include "core/numerics.h"
 #include "gpu/compute.h"
@@ -181,6 +182,49 @@ bool ReferenceIsolatedPass(gpu::DeviceContext& ctx, const std::string& shaderNam
         return false;
     output.assign(raw.begin() + outputOffset, raw.begin() + outputOffset + outputBytes);
     return true;
+}
+
+// Pass 13 writes the network's FP16 output to u0 rather than to the scratch
+// image, so it needs its own isolated-reference path.
+bool ReferenceCnbCt2d(gpu::DeviceContext& ctx, std::span<const uint8_t> initializers,
+                      const std::vector<uint8_t>& input, std::vector<uint8_t>& output,
+                      std::string& error) {
+    gpu::ComPtr<ID3D12RootSignature> signature;
+    if (!gpu::CreateBufferPassRootSignature(ctx, signature, error))
+        return false;
+    std::vector<uint8_t> cso;
+    if (!gpu::LoadShaderBytecode("m12ref/pass13", cso, error))
+        return false;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = signature.Get();
+    desc.CS = {cso.data(), cso.size()};
+    gpu::ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(ctx.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
+        error = "cannot create isolated reference CNB_CT2D PSO";
+        return false;
+    }
+    std::vector<uint8_t> scratch(20736000 + 1024, 0);
+    memcpy(scratch.data(), input.data(), input.size());
+    // The shipped store is unpredicated and writes 8 rows past 1080
+    // (240 KiB); reserve that documented tail so the reference is executed
+    // unmodified, and read back only the logical extent.
+    constexpr size_t kOutputTail = size_t(8) * 1920 * 8 * 2;
+    const std::vector<gpu::BufferInit> buffers = {
+        {4, nullptr}, {initializers.size(), initializers.data()},
+        {inference::fsr4::kCnbCt2dOutputBytes + kOutputTail, nullptr},
+        {scratch.size(), scratch.data()},
+    };
+    gpu::BufferPass pass{};
+    pass.pso = pso.Get();
+    pass.gridX = 120;
+    pass.gridY = 68;
+    pass.srv0 = 0;
+    pass.srv1 = 1;
+    pass.uav0 = 2;
+    pass.uav1 = 3;
+    std::vector<std::vector<uint8_t>> snapshots;
+    return gpu::RunBufferPasses(ctx, signature, buffers, {pass}, 3, {false}, snapshots, 2,
+                                inference::fsr4::kCnbCt2dOutputBytes, output, error);
 }
 
 bool SaveNumericIsa(gpu::DeviceContext& ctx, gpu::AmdExtensions& ext,
@@ -362,6 +406,8 @@ int RunFsr4Cnb() {
     } lifetime{ext};
     const auto directory = RepositoryRoot() / "build/reports/m12/cnb";
     std::filesystem::create_directories(directory);
+    const std::span<const uint8_t> initializers = std::span<const uint8_t>(weights)
+                                                     .first(kInitializerBytes);
     bool ok = true;
     for (uint32_t pass : {1u, 2u, 12u}) {
         if (!SaveNumericIsa(ctx, ext, "m12ref/pass" + std::to_string(pass),
@@ -433,6 +479,69 @@ int RunFsr4Cnb() {
                     }
                 }
             }
+        }
+    }
+    // Pass 13 (CNB_CT2D): the only pass that writes the network's FP16 output
+    // to u0 instead of the scratch, so it gets its own reference path.
+    {
+        const auto pass13Dir = RepositoryRoot() / "build/reports/m12/cnb-ct2d";
+        std::filesystem::create_directories(pass13Dir);
+        if (!SaveNumericIsa(ctx, ext, "m12ref/pass13", pass13Dir / "reference-pass13.isa",
+                            false, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+        for (uint32_t fixture = 0; fixture < 2; ++fixture) {
+            std::vector<uint8_t> input(inference::fsr4::kCnbCt2dInputBytes, 0);
+            uint32_t seed = 0x5EED4F12u;
+            if (fixture == 1) {
+                for (uint8_t& value : input) {
+                    seed = seed * 1664525u + 1013904223u;
+                    value = uint8_t(seed >> 24);
+                }
+            }
+            std::vector<uint8_t> output, repeated, reference;
+            std::string passIsa, repeatedIsa;
+            const bool ownOk = RunCnbCt2d(ctx, ext, input, weights, output, passIsa, error);
+            const bool repeatOk = ownOk &&
+                RunCnbCt2d(ctx, ext, input, weights, repeated, repeatedIsa, error);
+            const bool referenceOk = repeatOk &&
+                ReferenceCnbCt2d(ctx, initializers, input, reference, error);
+            if (!ownOk || !repeatOk || !referenceOk) {
+                std::fprintf(stderr, "pass13 fixture %u: %s\n", fixture, error.c_str());
+                return 1;
+            }
+            if (const char* dump = std::getenv("M12_DUMP"); dump && *dump == '1') {
+                const std::string stem = "pass13-fixture" + std::to_string(fixture);
+                for (const auto& [suffix, data] :
+                     {std::pair<const char*, const std::vector<uint8_t>*>{"-input.bin", &input},
+                      {"-own.bin", &output},
+                      {"-ref.bin", &reference}}) {
+                    std::ofstream file(pass13Dir / (stem + suffix), std::ios::binary);
+                    file.write(reinterpret_cast<const char*>(data->data()),
+                               std::streamsize(data->size()));
+                    if (!file)
+                        return 1;
+                }
+            }
+            size_t different = 0;
+            double maxDelta = 0.0;
+            for (size_t i = 0; i + 1 < output.size(); i += 2) {
+                uint16_t a = 0, b = 0;
+                memcpy(&a, output.data() + i, 2);
+                memcpy(&b, reference.data() + i, 2);
+                if (a != b) {
+                    ++different;
+                    maxDelta = std::max(maxDelta,
+                                        double(std::abs(core::F16ToF32(a) - core::F16ToF32(b))));
+                }
+            }
+            const bool deterministic = output == repeated;
+            std::printf("CNB_CT2D pass13 fixture%u: %zu/%zu halfword mismatches | "
+                        "max |delta| %g | deterministic %s\n",
+                        fixture, different, output.size() / 2, maxDelta,
+                        deterministic ? "yes" : "NO");
+            ok = ok && different == 0 && deterministic;
         }
     }
     std::string queueErrors;
@@ -716,5 +825,7 @@ int RunFsr4Fnb() {
 }
 
 } // namespace experiments
+
+
 
 

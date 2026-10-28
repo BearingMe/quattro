@@ -206,9 +206,11 @@ def main() -> None:
             shader.append(f"#define M12_P{index}_EPI2 {folded2:.17e}f")
         # The fused transposed-conv stage scales its accumulator by
         # fnbOutputScale * upscaleWeightScale, again folded once.
-        if (graph["passes"][index]["operator"] == "FNB_CT2D_ADD"
+        if (graph["passes"][index]["operator"] in ("FNB_CT2D_ADD", "CNB_CT2D")
                 and len(parameters[index]) >= 4 and len(records_of_pass) >= 8):
-            ct2d = f32(f32(parameters[index][3]) * f32(records_of_pass[6]["scale"]))
+            out_scale_index = 3 if graph["passes"][index]["operator"] == "FNB_CT2D_ADD" else 4
+            ct2d = f32(f32(parameters[index][out_scale_index])
+                       * f32(records_of_pass[6]["scale"]))
             shader.append(f"#define M12_P{index}_CT2D_SCALE {ct2d:.17e}f")
             skip_tensor = graph["passes"][index]["tensors"][1]
             if "quantizationScale" in skip_tensor:

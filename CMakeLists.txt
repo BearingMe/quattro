@@ -407,6 +407,20 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     endforeach()
     # FasterNetBlock passes 4/5/7/8/10: one fused DP4A kernel per pixel, as in
     # the shipped (non-WMMA) operator. Constants come from the generated header.
+    # Pass 13: the ConvNextBlock fused with the 2x upscale that writes the
+    # network FP16 output.
+    add_custom_command(
+        OUTPUT ${FSR4_SHADER_DIR}/m12/cnbct2d.cso
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m12
+        COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E main -O3
+                -enable-16bit-types -HV 2021 -I "${M12_DATA_DIR}" -I "${SHADER_SRC}"
+                -Fo ${FSR4_SHADER_DIR}/m12/cnbct2d.cso
+                ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_cnb_ct2d.hlsl
+        DEPENDS ${PROJECT_SOURCE_DIR}/src/inference/models/shaders/fsr4_cnb_ct2d.hlsl
+                ${M12_GENERATED}
+        COMMENT "dxc: our CNB_CT2D pass13"
+        VERBATIM)
+    list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/cnbct2d.cso)
     foreach(_fnb_pass 4 5 7 8 9 10 11)
         add_custom_command(
             OUTPUT ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso
@@ -428,6 +442,7 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
         src/inference/models/fsr4_cnb.cpp
         src/inference/models/fsr4_downscale.cpp
         src/inference/models/fsr4_fnb.cpp
+        src/inference/models/fsr4_cnb_ct2d.cpp
         src/experiments/fsr4_reproduction.cpp
         ${M12_DATA_DIR}/weights.generated.h)
     target_include_directories(rdna3-int8 PRIVATE ${M12_DATA_DIR})
@@ -520,3 +535,4 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     add_test(NAME m12_capture_integrity COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/scripts/m12_test_capture.py)
 endif()
+

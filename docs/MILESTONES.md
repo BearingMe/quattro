@@ -750,15 +750,17 @@ No FSR 4-specific model implementation yet.
 
 ### M12 — FSR 4 Model Reproduction
 
-**Status:** ◐ in progress — C01–C03 and C05 have evidence. Independent passes
-0/1/2/3/4/5/6/7/8/9/10/11/12 execute; C04 and C06–C09 remain incomplete. The gate is
-**UNVERIFIED**: the full reproduction graph does not execute yet. See
+**Status:** ◐ in progress — C01–C05 have evidence. All 14 passes
+(0–13) now have an independent, byte-exact reproduction, so C04 is evidenced;
+C06–C09 remain incomplete and the gate is **UNVERIFIED**: the passes are
+validated individually, not yet executed as one GPU-resident graph. See
 [`experiments/EXP-010-fsr4-model-graph.md`](experiments/EXP-010-fsr4-model-graph.md)
 and [`findings/2026-10-27-fsr4-v07-graph.md`](findings/2026-10-27-fsr4-v07-graph.md).
 Operator/weight evidence:
 [`experiments/EXP-011-fsr4-reproduction-operators.md`](experiments/EXP-011-fsr4-reproduction-operators.md),
-[`experiments/EXP-012-fsr4-downscale.md`](experiments/EXP-012-fsr4-downscale.md)
-and [`experiments/EXP-013-fsr4-fasternet.md`](experiments/EXP-013-fsr4-fasternet.md).
+[`experiments/EXP-012-fsr4-downscale.md`](experiments/EXP-012-fsr4-downscale.md),
+[`experiments/EXP-013-fsr4-fasternet.md`](experiments/EXP-013-fsr4-fasternet.md)
+and [`experiments/EXP-014-fsr4-cnb-ct2d.md`](experiments/EXP-014-fsr4-cnb-ct2d.md).
 
 Selected reference: **FSR 4.0.2, model `fsr4_model_v07_i8_quality`, 1080p**
 (`FSR-4.0.2-reference` @ `c5e34b4`) — not FSR 4.1, whose graph is closed.
@@ -799,9 +801,13 @@ Exactness again required ISA-derived folded constants, here
 `fl(fl(a·b)·fl(1/c))` rather than a division. Debug CTest
 **19/19 PASS (369.88 s)** and Release **19/19 PASS (371.28 s)** for the
 downscale increment. FNB_CT2D_ADD (2026-10-28, EXP-013): passes 9 and 11 reproduced with the fused
-2x upscale and add � 0 differing bytes for pass 9 against the unmodified
+2x upscale and add � 0 differing bytes for pass 9 against the unmodified
 reference, and 0/8,294,400 for pass 11 against the labelled predication control
-(its shipped 32/1 overload is unpredicated). Remaining C04 family: CNB_CT2D (13).
+(its shipped 32/1 overload is unpredicated). CNB_CT2D (2026-10-28, EXP-014): pass 13 reproduced with the fused 2x upscale
+and FP16 output � 0/16,588,800 halfword mismatches on both fixtures. Every
+operator of the pinned model now has an independent byte-exact reproduction;
+C04 is evidenced. What remains for the gate is integration: C07 (GPU-resident
+full graph) and C08/C09 (per-pass and end-to-end comparison).
 
 #### Objective
 
@@ -831,7 +837,7 @@ Use a fixed version of the model as the reference. Do not silently mix different
 - [x] C01: Select and pin the reference model version.
 - [x] C02: Establish model artifact availability.
 - [x] C03: Reproduce the known execution graph.
-- [ ] C04: Implement required missing operations.
+- [x] C04: Implement required missing operations.
 - [x] C05: Load the available model weights.
 - [ ] C06: Validate intermediate tensor dimensions.
 - [ ] C07: Execute the complete graph.
@@ -1225,4 +1231,6 @@ For each milestone:
 7. Stop.
 
 Do not automatically advance to the next milestone. The project exists to understand the system, not merely to produce a working implementation.
+
+
 
