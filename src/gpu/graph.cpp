@@ -76,9 +76,11 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
                      std::vector<std::vector<uint8_t>>& snapshots,
                      size_t outputBuffer, size_t outputBytes,
                       std::vector<uint8_t>& output, std::string& error, bool nativeWmma,
-                      std::vector<double>* gpuMilliseconds) {
+                       std::vector<double>* gpuMilliseconds, BufferRunMetrics* metrics) {
     if (gpuMilliseconds)
         gpuMilliseconds->clear();
+    if (metrics)
+        *metrics = {};
     if (!rootSignature || buffers.empty() || passes.empty() ||
         snapshotBuffer >= buffers.size() || outputBuffer >= buffers.size() ||
         buffers[outputBuffer].bytes < outputBytes ||
@@ -122,12 +124,19 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     }
 
     size_t totalBytes = 0;
+    size_t uploadBytes = 0;
     for (const BufferInit& b : buffers) {
+        if (!b.initialize && b.data) {
+            error = "non-initialized buffer cannot supply data";
+            return false;
+        }
         if (b.bytes == 0 || b.bytes > SIZE_MAX - totalBytes) {
             error = "invalid buffer size or total size overflow";
             return false;
         }
         totalBytes += b.bytes;
+        if (b.initialize)
+            uploadBytes += b.bytes; // <= totalBytes, already checked for overflow.
     }
 
     const D3D12_HEAP_PROPERTIES defaultHeap = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -135,15 +144,15 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     const D3D12_HEAP_PROPERTIES readbackHeap = HeapProps(D3D12_HEAP_TYPE_READBACK);
     ComPtr<ID3D12QueryHeap> timestamps;
     ComPtr<ID3D12Resource> timestampReadback;
-    if (gpuMilliseconds) {
-        if (passes.size() > UINT32_MAX / 2 || ctx.timestampFrequency == 0) {
+    if (gpuMilliseconds || metrics) {
+        if (passes.size() > (UINT32_MAX - 4) / 2 || ctx.timestampFrequency == 0) {
             error = "invalid timestamp count/frequency";
             return false;
         }
         D3D12_QUERY_HEAP_DESC queryDesc{};
         queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        queryDesc.Count = uint32_t(passes.size() * 2);
-        const auto desc = BufferDesc(passes.size() * 2 * sizeof(uint64_t), D3D12_RESOURCE_FLAG_NONE);
+        queryDesc.Count = uint32_t(passes.size() * 2 + 4);
+        const auto desc = BufferDesc((passes.size() * 2 + 4) * sizeof(uint64_t), D3D12_RESOURCE_FLAG_NONE);
         if (FAILED(ctx.device->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&timestamps))) ||
             FAILED(ctx.device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&timestampReadback)))) {
@@ -177,8 +186,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     }
 
     ComPtr<ID3D12Resource> upload;
-    {
-        const D3D12_RESOURCE_DESC desc = BufferDesc(totalBytes, D3D12_RESOURCE_FLAG_NONE);
+    if (uploadBytes != 0) {
+        const D3D12_RESOURCE_DESC desc = BufferDesc(uploadBytes, D3D12_RESOURCE_FLAG_NONE);
         if (FAILED(ctx.device->CreateCommittedResource(
                 &uploadHeap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) {
@@ -217,7 +226,9 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
     }
 
     // --- Initial data: one upload region per buffer. ---
-    {
+    if (timestamps)
+        list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(passes.size() * 2));
+    if (upload) {
         void* mapped = nullptr;
         if (FAILED(upload->Map(0, nullptr, &mapped))) {
             error = "upload Map failed";
@@ -225,6 +236,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         }
         size_t offset = 0;
         for (size_t i = 0; i < buffers.size(); ++i) {
+            if (!buffers[i].initialize)
+                continue;
             uint8_t* region = static_cast<uint8_t*>(mapped) + offset;
             if (buffers[i].data)
                 memcpy(region, buffers[i].data, buffers[i].bytes);
@@ -241,6 +254,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         }
         upload->Unmap(0, nullptr);
     }
+    if (timestamps)
+        list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(passes.size() * 2 + 1));
 
     list->SetComputeRootSignature(rootSignature.Get());
     if (nativeWmma)
@@ -327,6 +342,8 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
         }
     }
 
+    if (timestamps)
+        list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(passes.size() * 2 + 2));
     {
         const D3D12_RESOURCE_BARRIER toCopy = TransitionBarrier(
             buf[outputBuffer].Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -338,10 +355,12 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
             D3D12_RESOURCE_STATE_COMMON);
         list->ResourceBarrier(1, &toCommon);
     }
+    if (timestamps)
+        list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, uint32_t(passes.size() * 2 + 3));
 
     if (timestamps)
         list->ResolveQueryData(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
-                              uint32_t(passes.size() * 2), timestampReadback.Get(), 0);
+                              uint32_t(passes.size() * 2 + 4), timestampReadback.Get(), 0);
     if (FAILED(list->Close())) {
         error = "Close buffer-pass command list failed";
         return false;
@@ -377,9 +396,19 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
             return false;
         }
         const auto* ticks = static_cast<const uint64_t*>(raw);
-        for (size_t i = 0; i < passes.size(); ++i)
-            gpuMilliseconds->push_back(double(ticks[i * 2 + 1] - ticks[i * 2]) *
-                                        1000.0 / double(ctx.timestampFrequency));
+        if (gpuMilliseconds)
+            for (size_t i = 0; i < passes.size(); ++i)
+                gpuMilliseconds->push_back(double(ticks[i * 2 + 1] - ticks[i * 2]) *
+                                            1000.0 / double(ctx.timestampFrequency));
+        if (metrics) {
+            const size_t base = passes.size() * 2;
+            metrics->defaultHeapBytes = totalBytes;
+            metrics->uploadBytes = uploadBytes;
+            metrics->outputBytes = outputBytes;
+            metrics->uploadGpuMs = double(ticks[base + 1] - ticks[base]) * 1000.0 / double(ctx.timestampFrequency);
+            metrics->outputReadbackGpuMs = double(ticks[base + 3] - ticks[base + 2]) * 1000.0 / double(ctx.timestampFrequency);
+            metrics->totalGpuMs = double(ticks[base + 3] - ticks[base]) * 1000.0 / double(ctx.timestampFrequency);
+        }
         timestampReadback->Unmap(0, nullptr);
     }
     snapshots.assign(snapshotCount, {});

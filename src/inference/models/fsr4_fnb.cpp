@@ -74,6 +74,7 @@ bool AppendFasterNetBlock(gpu::DeviceContext& context, gpu::AmdExtensions& exten
         return false;
 
     plan.convolutionIsa.push_back(std::move(isa));
+    plan.convolutionStats.push_back(statsLine);
     gpu::BufferPass stage{};
     size_t source = input;
     if (shape.outFeatures != 0) {

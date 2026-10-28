@@ -19,6 +19,7 @@ struct DispatchPlan {
     std::vector<gpu::ComPtr<ID3D12PipelineState>> psos;
     std::vector<gpu::BufferPass> passes;
     std::vector<std::string> convolutionIsa;
+    std::vector<std::string> convolutionStats;
 };
 
 // Append only: no uploads, submissions, synchronization or CPU readback.
@@ -44,6 +45,13 @@ bool AppendModelGraph(gpu::DeviceContext& context, gpu::AmdExtensions& extension
                        DispatchPlan& plan, size_t input, size_t weights, uint32_t lastPass,
                        size_t& output, std::string& error,
                        std::vector<size_t>* boundaries = nullptr);
+
+// M15 equivalent-workload comparison: replace ONLY the eleven WMMA products
+// with native F16/F32 products + exact I32 conversion. DP4A and epilogues stay
+// identical. This is not a fully FP16 network or a different trained model.
+bool UseFp16MatrixComparison(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
+                             DispatchPlan& plan, std::vector<size_t>& boundaries,
+                             std::vector<std::string>& stats, std::string& error);
 
 // Fixed pinned graph prefix, inclusive lastPass (0..13). Separate live tensors;
 // optional logical snapshots at every model boundary, not every micro-dispatch.

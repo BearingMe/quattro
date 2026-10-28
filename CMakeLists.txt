@@ -436,6 +436,34 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
             VERBATIM)
         list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m12/fnb${_fnb_pass}.cso)
     endforeach()
+    # M15 equivalent native FP16 matrix backend; all other graph arithmetic stays fixed.
+    foreach(_shape cnb0:518400:144:16 cnb1:518400:16:32 cnb2:518400:32:16 ds3:129600:64:32 ds6:32400:128:64)
+        string(REPLACE ":" ";" _parts ${_shape})
+        list(GET _parts 0 _key)
+        list(GET _parts 1 _m)
+        list(GET _parts 2 _k)
+        list(GET _parts 3 _n)
+        foreach(_step convert raw)
+            if(_step STREQUAL "convert")
+                set(_entry convert_packet)
+            else()
+                set(_entry gemm_raw)
+            endif()
+            add_custom_command(
+                OUTPUT ${FSR4_SHADER_DIR}/m15/${_key}-${_step}.cso
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${FSR4_SHADER_DIR}/m15
+                COMMAND "${DXC_EXECUTABLE}" -nologo -T cs_6_6 -E ${_entry} -O3
+                        -enable-16bit-types -HV 2021 -I "${SHADER_INC}"
+                        -D CMP_M=${_m} -D CMP_K=${_k} -D CMP_N=${_n}
+                        -Fo ${FSR4_SHADER_DIR}/m15/${_key}-${_step}.cso
+                        ${SHADER_SRC}/gemm_f16_compare.hlsl
+                DEPENDS ${SHADER_SRC}/gemm_f16_compare.hlsl
+                        ${SHADER_INC}/AmdExtD3D/AmdExtD3DShaderIntrinsicsMatrixOps.hlsl
+                COMMENT "dxc: M15 FP16 ${_key} ${_step}"
+                VERBATIM)
+            list(APPEND M12_REF_CSOS ${FSR4_SHADER_DIR}/m15/${_key}-${_step}.cso)
+        endforeach()
+    endforeach()
     # M13: explicit linear/manual-exposure/LR-MV/inverted-depth/no-RCAS adapter.
     set(M13_COLOR_INCLUDE "${FSR4_REFERENCE_INCLUDE}/../include/gpu/fsr4")
     foreach(_stage pre post)
@@ -460,8 +488,10 @@ if(EXISTS "${FSR4_REFERENCE_PASSES}")
     endforeach()
     target_sources(rdna3-int8 PRIVATE
         src/inference/models/fsr4_temporal.cpp
+        src/inference/models/fsr4_fp16_compare.cpp
         src/experiments/fsr4_temporal.cpp
         src/experiments/fsr4_reference_probe.cpp
+        src/experiments/fsr4_profile.cpp
         src/inference/models/fsr4_weights.cpp
         src/inference/models/fsr4_pass0.cpp
         src/inference/models/fsr4_graph.cpp

@@ -57,6 +57,18 @@ struct BufferPass {
 struct BufferInit {
     size_t bytes = 0;
     const void* data = nullptr; // null -> zero-filled
+    // Explicit opt-in only: false skips upload/zero-fill. Caller guarantees
+    // every observed byte is written on GPU before read. data must be null.
+    bool initialize = true;
+};
+
+struct BufferRunMetrics {
+    size_t defaultHeapBytes = 0;
+    size_t uploadBytes = 0;
+    size_t outputBytes = 0;
+    double uploadGpuMs = 0;
+    double outputReadbackGpuMs = 0;
+    double totalGpuMs = 0;
 };
 
 // Runs `passes` in order. After pass `i`, if `snapshotAfter[i]` is true, the
@@ -73,6 +85,7 @@ bool RunBufferPasses(DeviceContext& ctx, ComPtr<ID3D12RootSignature> rootSignatu
                      size_t outputBuffer, size_t outputBytes,
                       std::vector<uint8_t>& output, std::string& error,
                       bool nativeWmma = false,
-                      std::vector<double>* gpuMilliseconds = nullptr);
+                      std::vector<double>* gpuMilliseconds = nullptr,
+                      BufferRunMetrics* metrics = nullptr);
 
 } // namespace gpu

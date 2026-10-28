@@ -43,6 +43,7 @@ const std::vector<Experiment>& experiments() {
         {"fsr4-temporal", "M13 experimental 720p -> 1080p temporal pipeline, explicit supported permutation", &experiments::RunFsr4Temporal},
         {"fsr4-reference-probe", "M14 official runtime version/context preflight (not an image comparison)", &experiments::RunFsr4ReferenceProbe},
         {"fsr4-reference-capture", "M14 official 4.1.2 capture of serialized M13 inputs (explicit cross-version reference)", &experiments::RunFsr4ReferenceCapture},
+        {"fsr4-profile", "M15 warmed per-dispatch model baseline with transfer timing and exact output checks", &experiments::RunFsr4Profile},
         {"fsr4-downscale", "M12 our quantized downscale convolutions (passes 3/6) vs isolated reference passes", &experiments::RunFsr4Downscale},
         {"fsr4-fnb", "M12 our FasterNetBlocks (passes 4/5/7/8/10) vs isolated reference passes", &experiments::RunFsr4Fnb},
 #endif

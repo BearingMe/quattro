@@ -52,6 +52,7 @@ bool AppendConvNextBlock(gpu::DeviceContext& context, gpu::AmdExtensions& extens
                 if (!gpu::GetPipelineIsa(extensions, handle, isa, statsLine, error))
                     return false;
                 plan.convolutionIsa.push_back(std::move(isa));
+                plan.convolutionStats.push_back(statsLine);
             } else if (FAILED(context.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) {
                 error = "cannot create ConvNextBlock packing/epilogue PSO: " + name;
                 return false;

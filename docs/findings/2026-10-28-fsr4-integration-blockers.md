@@ -64,6 +64,21 @@ Earlier numerical contract: [epilogue finding](2026-10-28-fsr4-quantized-output-
   the report explicitly states that limitation. Do not claim equivalence of
   runs with different input, CSO or weight identities.
 
+## M15 performance/conversion addendum
+
+- [M] Equivalent FP16 products cannot be assumed integer-exact merely because
+  operands/sums fit the nominal mantissas. Both accumulator Copy and explicit
+  truncation failed; nearest-integer rounding before I32 conversion passes the
+  retained boundaries. Detailed deltas, failed attempts and causal limitations:
+  [EXP-019](../experiments/EXP-019-fsr4-native-performance.md). Check raw products
+  before rewriting layouts; do not revive the unsupported Copy-specific diagnosis.
+- [S/M] Workspace-upload omission is opt-in and caller-owned, not a global
+  change to null-data buffers. Keep default zero initialization for initial
+  history; preserve poison and all-boundary regressions when changing lifetimes.
+- [S] Persist ISA/stats before the first correctness test, use exclusive run
+  directories, and retain cold/warmup and losing candidates. Compare complete
+  invocation costs including conversion/transfer, not just the fastest kernel.
+
 ## Open questions / non-goals
 
 - [U] Signed runtime behavior and other hardware/resolutions are not inferred

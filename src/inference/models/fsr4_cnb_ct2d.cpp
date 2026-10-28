@@ -31,6 +31,7 @@ bool AppendCnbCt2d(gpu::DeviceContext& context, gpu::AmdExtensions& extensions,
         return false;
 
     plan.convolutionIsa.push_back(std::move(isa));
+    plan.convolutionStats.push_back(statsLine);
     const size_t destination = plan.buffers.size();
     plan.buffers.push_back({kCnbCt2dOutputBytes, nullptr});
     const size_t unused = plan.buffers.size();
